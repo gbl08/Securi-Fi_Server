@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isLinkedToHome(hid) {
+      return exists(/databases/$(database)/documents/userHomeLinks/$(request.auth.uid + '_' + hid));
+    }
+
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    match /homes/{hid} {
+      allow read: if request.auth != null && isLinkedToHome(hid);
+      allow write: if request.auth != null && isLinkedToHome(hid);
+      // Note: this doesn't yet distinguish owner vs member permissions —
+      // fine for now, tighten later if "member" should be read-only.
+    }
+
+    match /userHomeLinks/{linkId} {
+      allow read: if request.auth != null && request.auth.uid == resource.data.uid;
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.uid;
+      allow delete: if request.auth != null && request.auth.uid == resource.data.uid;
+    }
+
+    match /nodes/{nodeDocId} {
+      allow read, write: if request.auth != null && isLinkedToHome(resource.data.hid);
+    }
+
+    match /cache/{hid} {
+      allow read: if request.auth != null && isLinkedToHome(hid);
+      allow write: if false; // backend/server use the Admin SDK, which bypasses rules entirely
+    }
+
+    match /events/{eid} {
+      allow read: if request.auth != null && isLinkedToHome(resource.data.hid);
+      allow update: if request.auth != null && isLinkedToHome(resource.data.hid)
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                       .hasOnly(['dismissedByUser', 'falseAlarm']);
+      allow create: if false;
+    }
+  }
+}

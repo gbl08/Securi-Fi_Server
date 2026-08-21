@@ -11,3 +11,36 @@ venv/
 .env
 
 .vscode/
+
+serviceAccountKey.json
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Sensitive Firebase Keys (CRITICAL)
+serviceAccountKey.json
+*.json
+!firebase.json
+!firestore.indexes.json
+!skills-lock.json
+
+# Environment variables / API secrets
+.env
+.env.*
+
+# Python caches and artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# IDE / System files
+.DS_Store
+.vscode/
+.idea/
+
+# Firebase debug logs
+firebase-debug.log*
+.firebase/
