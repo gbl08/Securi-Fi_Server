@@ -27,45 +27,6 @@ IDLE_CLOSE_COUNT = 30   # consecutive idle packages needed to auto-close an open
 
 print("[DB] Firebase connected :D")
 
-
-# ============================================================
-# Users
-# ============================================================
-
-def create_user_profile(uid: str, email: str, phone_number: str, display_name: str = ""):
-    # Firebase Auth owns the password; Firestore holds everything else
-    # the app needs to read/display for this user.
-    db.collection("users").document(uid).set({
-        "email": email,
-        "phoneNumber": phone_number,
-        "displayName": display_name,
-        "photoURL": None,
-        "createdAt": datetime.now(timezone.utc).isoformat(),
-        "fcmTokens": [],
-    }, merge=True)
-    print(f"[DB] User profile created: {uid}")
-
-
-def get_user_profile(uid: str) -> Optional[dict]:
-    doc = db.collection("users").document(uid).get()
-    return doc.to_dict() if doc.exists else None
-
-
-def add_fcm_token(uid: str, token: str):
-    # array_union avoids duplicate tokens and doesn't require reading
-    # the doc first to check membership.
-    db.collection("users").document(uid).update({
-        "fcmTokens": firestore.ArrayUnion([token])
-    })
-
-
-def remove_fcm_token(uid: str, token: str):
-    # Call this on logout so a signed-out device stops receiving pushes.
-    db.collection("users").document(uid).update({
-        "fcmTokens": firestore.ArrayRemove([token])
-    })
-
-
 # ============================================================
 # Homes
 # ============================================================
@@ -109,38 +70,8 @@ def set_armed(hid: str, armed: bool):
     # NOT called directly in response to a user tapping arm/disarm.
     db.collection("homes").document(hid).update({"armed": armed})
 
-
-def set_requested_armed(hid: str, requested_armed: bool):
-    # Called by the backend when the user taps arm/disarm in the app.
-    # The server watches this field and relays the command to hardware.
-    db.collection("homes").document(hid).update({"requestedArmed": requested_armed})
-
-
 def set_active_event(hid: str, event_id: Optional[str]):
     db.collection("homes").document(hid).update({"activeEventId": event_id})
-
-
-# ============================================================
-# User <-> Home links
-# ============================================================
-
-def link_user_to_home(uid: str, hid: str, role: str = "owner"):
-    link_id = f"{uid}_{hid}"
-    db.collection("userHomeLinks").document(link_id).set({
-        "uid": uid,
-        "hid": hid,
-        "role": role,
-    })
-
-
-def unlink_user_from_home(uid: str, hid: str):
-    link_id = f"{uid}_{hid}"
-    db.collection("userHomeLinks").document(link_id).delete()
-
-
-def get_homes_for_user(uid: str) -> list[dict]:
-    links = db.collection("userHomeLinks").where("uid", "==", uid).stream()
-    return [link.to_dict() for link in links]
 
 
 # ============================================================
@@ -172,13 +103,6 @@ def update_node_warnings(hid: str, node_id: str, low_battery: bool, not_transmit
     db.collection("nodes").document(doc_id).update({
         "warnings": warnings.model_dump(by_alias=True)
     })
-
-
-def rename_node(hid: str, node_id: str, nickname: str):
-    # This is the one field the backend/app is allowed to write on `nodes` —
-    # everything else on this collection belongs to the server.
-    doc_id = f"{hid}_{node_id}"
-    db.collection("nodes").document(doc_id).update({"nickname": nickname})
 
 
 # ============================================================
@@ -284,11 +208,3 @@ def close_event(hid: str, eid: str):
     })
     set_active_event(hid, None)
     print(f"[DB] Event closed: {eid}")
-
-
-def dismiss_event(eid: str, false_alarm_description: Optional[str] = None):
-    # Called from the backend when a user dismisses an alert / marks a false alarm.
-    update_data = {"dismissedByUser": True}
-    if false_alarm_description is not None:
-        update_data["falseAlarm"] = false_alarm_description
-    db.collection("events").document(eid).update(update_data)
