@@ -1,17 +1,24 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect # web socket e ca sa luam package-urile din mosquitto de la esp master
-from contextlib import asynccontextmanager # intreaba-l pe Neamt daca iti trebuie, e legat de startup si shutdown
+from fastapi import FastAPI, HTTPException
+from contextlib import asynccontextmanager
 
-import asyncio # dai run la chiestii in "paralel" fara multi threading, foarte smecher daca ma intrebi pe mine :)
+import asyncio
 import json
 import threading
 
-from paho.mqtt.client import mqtt
-from datetime import datetime
+import paho.mqtt.client as mqtt 
+from datetime import datetime, timezone
 
-# from server.auxiliary.models import package
-# from server.auxiliary.database import init_db, set_event, set_armed, set_fcm_token, get_history, get_armed, get_fcm_token
-# from server.auxiliary.notifications import send_fcm
-
-# Setup:
-MQTT_BROKER = "localhost"
-MQTT_PORT = 1883
+from models import Package
+from database import (
+    get_home_by_mac,
+    touch_home_last_seen,
+    set_armed,
+    write_cache,
+    analyse_cache,
+    upsert_node,
+    update_node_warnings,
+    start_event,
+    update_event,
+    close_event,
+    get_home,
+)

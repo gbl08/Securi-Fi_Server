@@ -63,6 +63,8 @@ class HomeDoc(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
+    armed: bool = None
+
 
 class NodeWarningDoc(BaseModel):
     low_battery: bool = Field(alias="lowBattery")
