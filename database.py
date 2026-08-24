@@ -104,6 +104,10 @@ def update_node_warnings(hid: str, node_id: str, low_battery: bool, not_transmit
         "warnings": warnings.model_dump(by_alias=True)
     })
 
+def get_user_profile(uid: str) -> Optional[dict]:
+    doc = db.collection("users").document(uid).get()
+    return doc.to_dict() if doc.exists else None
+
 
 # ============================================================
 # Cache & threat analysis
