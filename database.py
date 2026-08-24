@@ -64,6 +64,10 @@ def touch_home_last_seen(hid: str):
         "lastSeen": datetime.now(timezone.utc)
     })
 
+def set_requested_armed(hid: str, requested_armed: bool):
+    # The server watches this field and relays the command to hardware.
+    db.collection("homes").document(hid).update({"requestedArmed": requested_armed})
+
 
 def set_armed(hid: str, armed: bool):
     # Called by the server once hardware confirms the state change —

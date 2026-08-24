@@ -7,6 +7,7 @@ import threading
 
 import paho.mqtt.client as mqtt 
 from datetime import datetime, timezone
+from database import db
 
 from models import Package
 from database import (
@@ -58,3 +59,105 @@ async def handle_package(raw: dict):
             not_transmitting= node.warnings.not_transmitting,
             signal_weak= node.warnings.signal_weak
         )
+
+        home_doc = get_home(hid)
+        if home_doc and home_doc.get("armed") != pkg.armed:
+            set_armed(hid, pkg.armed)
+            print(f"[SERVER] Armed state synced to {pkg.armed} for home {hid}")
+
+        write_cache(hid, pkg)
+        analysis = analyse_cache(hid, pkg)
+
+        active_event_id = home_doc.get("activeEventId") if home_doc else None
+
+        if analysis["is_threat"] and pkg.armed:
+            if not active_event_id:
+                eid = start_event(hid, pkg.intruder_probability)
+                await notify_home(hid, pkg.warning_type or "intruder", pkg.intruder_probability)
+                print(f"[SERVER] Event opened: {eid}")
+            else:
+                update_event(active_event_id, pkg.intruder_probability)
+
+        elif analysis["should_close_session"] and active_event_id:
+            close_event(hid, active_event_id)
+            print(f"[SERVER] Event auto-closed: {active_event_id}")
+
+        errors = [
+            f"{n.node_id}:{w}"
+            for n in pkg.nodes
+            for w, v in [
+                ("low_battery", n.warnings.low_battery),
+                ("not_transmitting", n.warnings.not_transmitting),
+                ("signal_weak", n.warnings.signal_weak),
+            ]
+            if v
+        ]
+        if errors:
+            print(f"[SERVER] Node warnings for home {hid}: {errors}")
+
+        touch_home_last_seen(hid)
+
+
+# mqtt
+def on_mqtt_message(client, userdata, msg):
+    try:
+        raw = json.loads(msg.payload.decode("utf-8"))
+
+        asyncio.run_coroutine_threadsafe(handle_package(raw), loop)
+    except json.JSONDecodeError as e:
+        print(f"[MQTT] JSON parse error: {e}")
+    except Exception as e:
+        print(f"[MQTT] Unexpected error: {e}")
+
+def on_mqtt_connect(client, userdata, flags, rc):
+    if rc == 0:
+        client.subscribe(MQTT_TOPIC)
+        print(f"[MQTT] Connected, subscribed to {MQTT_TOPIC}")
+    else:
+        print(f"[MQTT] Connection failed rc={rc}")
+
+def on_mqtt_disconnect(client, userdata, rc):
+    if rc != 0:
+        print(f"[MQTT] Unexpected disconnect rc={rc}. Paho will reconnect")
+
+def start_mqtt():
+    global mqtt_client
+    mqtt_client = mqtt.Client()
+
+    mqtt_client.on_message = on_mqtt_message
+    mqtt_client.on_connect = on_mqtt_connect
+    mqtt_client.on_disconnect = on_mqtt_disconnect
+
+    mqtt_client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
+    mqtt_client.loop_forever()
+
+
+# lifespan
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global loop
+    loop = asyncio.get_event_loop()
+
+    threading.Thread(target=start_mqtt, daemon=True).start()
+
+    print("[SERVER] Securi-Fi MVP4 started")
+    yield
+    print("[SERVER] Securi-Fi stopped") 
+
+
+app = FastAPI(lifespan=lifespan)
+
+# esp - server endpoints:
+@app.get("/health")
+def health():
+    return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+@app.post("/arm/{hid}")
+def request_arm(hid: str, armed: bool):
+    from database import set_requested_armed
+    try:
+        set_requested_armed(hid, armed)
+        return {"hid": hid, "requestedArmed": armed}
+    except Exception as e:
+        print(f"[SERVER] requested_arm error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to set requested arm state")
