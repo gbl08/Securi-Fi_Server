@@ -24,6 +24,10 @@ class NodeReading(BaseModel):
     node_id: str
     role: str
     state: str
+
+    armed: Optional[bool] 
+    requested_armed: Optional[bool] # TODO
+
     movement_pct: int
     probability: float = Field(ge=0.0, le=1.0)
     raw_mq2_reading: int  # was missing in the original model — see note below

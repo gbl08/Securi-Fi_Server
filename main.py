@@ -12,6 +12,7 @@ from database import db
 from models import Package
 from database import (
     set_node_armed,
+    get_node,
     get_home_by_mac,
     touch_home_last_seen,
     set_armed,
@@ -44,62 +45,82 @@ async def handle_package(raw: dict):
         return
 
     home = get_home_by_mac(pkg.master_mac)
+
     if not home:
         print(f"[SERVER] Unknown MAC: {pkg.master_mac}")
         return
 
     hid = home["hid"]
 
+    # updating individual nodes:
     for node in pkg.nodes:
-        upsert_node(hid, node.node_id, node.role)
-        update_node_warnings(
-            hid= hid,
-            node_id= node.node_id,
-
-            low_battery= node.warnings.low_battery,
-            not_transmitting= node.warnings.not_transmitting,
-            signal_weak= node.warnings.signal_weak
+        upsert_node(
+            hid,
+            node.node_id,
+            node.role
         )
 
-        home_doc = get_home(hid)
-        if home_doc and home_doc.get("armed") != pkg.armed:
-            set_armed(hid, pkg.armed)
-            print(f"[SERVER] Armed state synced to {pkg.armed} for home {hid}")
+        update_node_warnings(
+            hid=hid,
+            node_id=node.node_id,
+            low_battery=node.warnings.low_battery,
+            not_transmitting=node.warnings.not_transmitting,
+            signal_weak=node.warnings.signal_weak
+        )
 
-            for node in pkg.nodes:
-                set_node_armed(hid, node.node_id, pkg.armed)
+    # confirming armed state
+    for node in pkg.nodes:
+        current_node = get_node(hid, node.node_id)
+        if not current_node:
+            continue
 
-        write_cache(hid, pkg)
-        analysis = analyse_cache(hid, pkg)
+        requested_armed = current_node.get("requestedArmed")
+        if requested_armed is None:
+            continue
 
-        active_event_id = home_doc.get("activeEventId") if home_doc else None
+        if node.armed != requested_armed:
+            send_node_arm_command( # TODO
+                hid, 
+                node.node_id,
+                requested_armed
+            )
 
-        if analysis["is_threat"] and pkg.armed:
-            if not active_event_id:
-                eid = start_event(hid, pkg.intruder_probability)
-                # await notify_home(hid, pkg.warning_type or "intruder", pkg.intruder_probability)
-                print(f"[SERVER] Event opened: {eid}")
-            else:
-                update_event(active_event_id, pkg.intruder_probability)
+    # writing in the cache
+    write_cache(hid, pkg)
 
-        elif analysis["should_close_session"] and active_event_id:
-            close_event(hid, active_event_id)
-            print(f"[SERVER] Event auto-closed: {active_event_id}")
+    # analysing package history
+    analysis = analyse_cache(hid, pkg)
 
-        errors = [
-            f"{n.node_id}:{w}"
-            for n in pkg.nodes
-            for w, v in [
-                ("low_battery", n.warnings.low_battery),
-                ("not_transmitting", n.warnings.not_transmitting),
-                ("signal_weak", n.warnings.signal_weak),
-            ]
-            if v
-        ]
-        if errors:
-            print(f"[SERVER] Node warnings for home {hid}: {errors}")
+    # event handling:
+    home_doc = get_home(hid)
+    active_event_id = (
+        home_doc.get("activeEventId")
+        if home_doc
+        else None
+    )
 
-        touch_home_last_seen(hid)
+    # if analysis["is_threat"] and pkg.armed: # TODO MAI RAMANE PKG.ARMED?
+    #     if not active_event_id:
+    #         eid = start_event(
+    #             hid, 
+    #             pkg.intruder_probability
+    #         )
+
+    #         print(f"[SERVER] Event opened: {eid}")
+
+    #     else:
+    #         update_event(
+    #             active_event_id,
+    #             pkg.intruder_probability
+    #         )
+    # elif analysis["should_close_session"] and active_event_id:
+    #     close_event(
+    #         hid,
+    #         active_event_id
+    #     )
+
+    #     print(f"[SERVER] Event auto closed: {active_event_id}")
+
 
 
 # mqtt
