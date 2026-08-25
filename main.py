@@ -99,27 +99,36 @@ async def handle_package(raw: dict):
         else None
     )
 
-    # if analysis["is_threat"] and pkg.armed: # TODO MAI RAMANE PKG.ARMED?
-    #     if not active_event_id:
-    #         eid = start_event(
-    #             hid, 
-    #             pkg.intruder_probability
-    #         )
+    if active_event_id: # TODO rewrite
+        if analysis["should_close_session"]:
+            close_event(hid, active_event_id)
+        else:
+            update_event(active_event_id, pkg.intruder_probability) # TODO DE FACUT O FUNCTIE MAI BUNA PT EVENTS
+    else:
+        if analysis["is_threat"]: # and pkg.armed:
+            eid = start_event(hid, pkg.intruder_probability)
 
-    #         print(f"[SERVER] Event opened: {eid}")
+            print(f"[SERVER] Event opened: {eid}")
+        
 
-    #     else:
-    #         update_event(
-    #             active_event_id,
-    #             pkg.intruder_probability
-    #         )
-    # elif analysis["should_close_session"] and active_event_id:
-    #     close_event(
-    #         hid,
-    #         active_event_id
-    #     )
+    # logging warnings
+    errors = [
+        f"{n.node_id}:{warning}"
+        for n in pkg.nodes
+        for warning, value in [
+            ("low_battery", n.warnings.low_battery),
+            ("not_transmitting", n.warnings.not_transmitting),
+            ("signal_weak", n.warnings.signal_weak),
+        ]
+        if value
+    ]
 
-    #     print(f"[SERVER] Event auto closed: {active_event_id}")
+    if errors: # TODO SA AJUNGA LA USER
+        print(f"[SERVER] Node warnings for home {hid}: {errors}")
+
+
+    touch_home_last_seen(hid)
+    
 
 
 
