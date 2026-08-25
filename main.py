@@ -11,6 +11,7 @@ from database import db
 
 from models import Package
 from database import (
+    set_node_armed,
     get_home_by_mac,
     touch_home_last_seen,
     set_armed,
@@ -24,7 +25,7 @@ from database import (
     get_home,
 )
 
-from notifications import notify_home
+# from notifications import notify_home
 
 MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
@@ -65,6 +66,9 @@ async def handle_package(raw: dict):
             set_armed(hid, pkg.armed)
             print(f"[SERVER] Armed state synced to {pkg.armed} for home {hid}")
 
+            for node in pkg.nodes:
+                set_node_armed(hid, node.node_id, pkg.armed)
+
         write_cache(hid, pkg)
         analysis = analyse_cache(hid, pkg)
 
@@ -73,7 +77,7 @@ async def handle_package(raw: dict):
         if analysis["is_threat"] and pkg.armed:
             if not active_event_id:
                 eid = start_event(hid, pkg.intruder_probability)
-                await notify_home(hid, pkg.warning_type or "intruder", pkg.intruder_probability)
+                # await notify_home(hid, pkg.warning_type or "intruder", pkg.intruder_probability)
                 print(f"[SERVER] Event opened: {eid}")
             else:
                 update_event(active_event_id, pkg.intruder_probability)

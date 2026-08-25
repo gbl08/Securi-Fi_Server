@@ -84,17 +84,28 @@ def set_active_event(hid: str, event_id: Optional[str]):
 
 def upsert_node(hid: str, node_id: str, role: str, nickname: Optional[str] = None):
     doc_id = f"{hid}_{node_id}"
-    doc_ref = db.collection("nodes").document(doc_id)
+    doc_ref = db.colelction("nodes").document(doc_id)
     existing = doc_ref.get()
+
+    existing_data = existing.to_dict() if existing else {}
 
     node = NodeDoc(
         hid=hid,
         node_id=node_id,
-        nickname=nickname or (existing.to_dict().get("nickname") if existing.exists else node_id),
+        nickname=nickname or existing_data.get("nickname") or node_id,
         role=role,
-        warnings=NodeWarningDoc(low_battery=False, not_transmitting=False, signal_weak=False),
+        warnings=NodeWarningDoc(
+            low_battery=False,
+            not_transmitting=False,
+            signal_weak=False
+        ),
+        armed=existing_data.get("armed", False),
     )
-    doc_ref.set(node.model_dump(by_alias=True), merge=True)
+
+    doc_ref.set(
+        node.model_dump(by_alias=True),
+        merge=True
+    )
 
 
 def update_node_warnings(hid: str, node_id: str, low_battery: bool, not_transmitting: bool, signal_weak: bool):
@@ -111,6 +122,24 @@ def update_node_warnings(hid: str, node_id: str, low_battery: bool, not_transmit
 def get_user_profile(uid: str) -> Optional[dict]:
     doc = db.collection("users").document(uid).get()
     return doc.to_dict() if doc.exists else None
+
+def get_node(hid: str, node_id: str) -> Optional[dict]:
+    doc_id = f"{hid}_{node_id}"
+
+    doc = db.collection("nodes").document(doc_id).get()
+
+    if not doc.exists:
+        return None
+
+    return {"id": doc.id, **doc.to_dict()}
+
+def set_node_armed(hid: str, node_id: str, armed: bool):
+    doc_id = f"{hid}_{node_id}"
+
+    try:
+        db.collection("nodes").document(doc_id).update({"armed": armed})
+    except Exception as e:
+        print(f"[DB] Failed to set node armed state {doc_id}: {e}")
 
 
 # ============================================================
@@ -130,7 +159,7 @@ def write_cache(hid: str, package: Package):
             node.node_id: CacheReadingDoc(
                 probability=node.probability,
                 state=node.state,
-                sensors=CacheSensorsDoc(flame=node.sensors.flame, gas=node.sensors.gas),
+                sensors=CacheSensorsDoc(flame=node.sensors.flame, gas=node.sensors.gas, battery_pct=node.sensors.battery_pct),
                 raw_mq2_reading=node.raw_mq2_reading,
                 movement_pct=node.movement_pct,
             )

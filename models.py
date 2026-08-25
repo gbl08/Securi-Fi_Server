@@ -16,8 +16,8 @@ class NodeWarning(BaseModel):
 
 class NodeSensors(BaseModel):
     flame: bool = False
-    water: bool = False
     gas: bool = False
+    battery_pct: Optional[int] = None 
 
 
 class NodeReading(BaseModel):
@@ -88,6 +88,7 @@ class NodeDoc(BaseModel):
 class CacheSensorsDoc(BaseModel):
     flame: bool
     gas: bool
+    battery_pct: Optional[int] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
