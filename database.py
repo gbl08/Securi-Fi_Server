@@ -95,9 +95,9 @@ def upsert_node(hid: str, node_id: str, role: str, nickname: Optional[str] = Non
             not_transmitting=False,
             signal_weak=False
         ),
-        armed=(existing.to_dict().get("armed", False) if existing.existing else False),
+        armed=(existing.to_dict().get("armed", False) if existing.exists else False),
         requested_armed=(
-            existing.to_dict().get("requestedArmed", False) if existing.existing else False
+            existing.to_dict().get("requestedArmed", False) if existing.exists else False
         )
     )
 
@@ -217,7 +217,7 @@ def analyse_cache(hid: str, package: Package) -> dict:
 
 
 # events
-def start_event(hid: str, peak_probability: float) -> str:
+def start_event(hid: str) -> str:
     eid = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
 

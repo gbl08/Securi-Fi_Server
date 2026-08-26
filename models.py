@@ -18,9 +18,9 @@ class NodeReading(BaseModel):
     node_id: str
     role: str
     state: str
-    amred: Optional[bool] = None
+    armed: Optional[bool] = None
 
-    movement_pct: int
+    movement_pct: int # 0 - 200
     probability: float = Field(ge=0.0, le=1.0) # ? 
 
     raw_mq2_reading: int
@@ -122,8 +122,6 @@ class EventDoc(BaseModel):
 
     started_at: datetime = Field(alias="startedAt")
     ended_at: Optional[datetime] = Field(default=None, alias="endedAt")
-
-    peak_probability: float = Field(alias="peakProbability", ge=0.0, le=1.0)
     
     dismissed_by_user: bool = Field(default=False, alias="dismissedByUser")
     false_alarm: Optional[str] = Field(default=None, alias="falseAlarm")
