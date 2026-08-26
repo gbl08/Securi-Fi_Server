@@ -166,7 +166,7 @@ async def handle_package(raw: dict):
 
     if analysis["is_threat"]:
         if not active_eid:
-            eid = start_event(hid, pkg.intruder_probability)
+            eid = start_event(hid)
             print(f"[SERVER] Intruder event started: {eid}")
         else:
             pass # update_event

@@ -195,21 +195,22 @@ def analyse_cache(hid: str, package: Package) -> dict:
     if len(window) > MAX_CACHE:
         window.pop(0)
 
-    PROBABILITY_THRESHOLD = 0.7
+    package_treshold = 140
 
     above_threshold = sum(
-        1 for p in window if p.intruder_probability >= PROBABILITY_THRESHOLD
+        1 for p in window if p.package_movement_pct >= package_treshold
     )
 
     idle_streak = 0
     for p in reversed(window):
-        if p.intruder_probability < PROBABILITY_THRESHOLD and p.warning_type is None:
+        if p.package_movement_pct < package_treshold and p.warning_type is None:
             idle_streak += 1
         else:
             break
 
     return {
         "is_threat": above_threshold >= 3,    
+        "above_threshold": above_threshold,
         "should_close_session": idle_streak >= IDLE_CLOSE_COUNT,
         "window_size": len(window),
         "window": window,
@@ -240,20 +241,3 @@ def close_event(hid: str, eid: str):
     })
     set_active_event(hid, None)
     print(f"[DB] Event closed: {eid}")
-
-# def update_event(eid: str, probability: float):
-#     doc_ref = db.collection("events").document(eid)
-#     doc = doc_ref.get()
-#     if not doc.exists:
-#         return
-
-#     data = doc.to_dict()
-#     new_peak = max(data.get("peakProbability", 0.0), probability)
-#     # Running average — approximate, avoids storing every reading just to average them.
-#     old_avg = data.get("avgProbability", probability)
-#     new_avg = (old_avg + probability) / 2
-
-#     doc_ref.update({
-#         "peakProbability": new_peak,
-#         "avgProbability": new_avg,
-#     })

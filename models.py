@@ -21,7 +21,6 @@ class NodeReading(BaseModel):
     armed: Optional[bool] = None
 
     movement_pct: int # 0 - 200
-    probability: float = Field(ge=0.0, le=1.0) # ? 
 
     raw_mq2_reading: int
 
@@ -36,6 +35,8 @@ class Package(BaseModel):
 
     warning_type: Optional[str] = None
     nodes: List[NodeReading]
+
+    package_movement_pct: int # cv formula magica ca sa scoatem un overall movement_pct? 
 
 
 
@@ -99,7 +100,6 @@ class CacheSensorsDoc(BaseModel):
 
 
 class CacheReadingDoc(BaseModel):
-    probability: float = Field(ge=0.0, le=1.0)
     state: str
 
     sensors: CacheSensorsDoc
@@ -110,7 +110,11 @@ class CacheReadingDoc(BaseModel):
 
 
 class CacheDoc(BaseModel):
-    overall_reading: float = Field(alias="overallReading", ge=0.0, le=1.0)
+    above_treshold: int # asta folosesti drept "probability"
+    is_alarm: bool # daca cache-ul in sine ar trebui sa inceapa un nou event sau nu
+
+    window_size: int 
+
     node_readings: dict[str, CacheReadingDoc] = Field(alias="nodeReadings")
     updated_at: datetime = Field(alias="updatedAt")
 
@@ -127,4 +131,9 @@ class EventDoc(BaseModel):
     false_alarm: Optional[str] = Field(default=None, alias="falseAlarm")
 
     model_config = ConfigDict(populate_by_name=True)
+
+
+# in database in events va fi gen:
+# hid, startedAt, endedAt, dismissedByUser
+# si un subcollection packages/{auto_id} unde sa dea push cache la chunk-uri de package-uri cand e plin
 
