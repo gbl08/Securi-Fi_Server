@@ -40,6 +40,11 @@ class NodeConfigRequest(BaseModel):
     node_id: str
     master_mac: str
 
+    arm: bool = False
+    diasarm: bool = False
+    reboot: bool = False
+    deep_sleep: bool = False
+
 class NodeConfigCommand(BaseModel):
     node_id: str
     cmd: str
@@ -48,11 +53,12 @@ class NodeConfigConfirmation(BaseModel):
     node_id: str
     master_mac: str
 
-    # ce vrei sa schimbi = 1, restul 0
-    armed: bool
-    disarmed: bool
-    deep_sleep: bool
+    # ce vrei sa schimbi = True, restul False
+    arm: bool
+    disarm: bool
     reboot: bool
+    deep_sleep: bool
+    
     # etc
 
     success: bool

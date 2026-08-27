@@ -170,6 +170,7 @@ ALARM_MULTI_COUNT = 2
 THREAT_COUNT = 3
 
 _package_windows: dict[str, list[Package]] = {}
+_event_chunk_counters: dict[str, int] = {}
 
 def node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]: # TODO testat, fine tune
     active_nodes = [n for n in pkg.nodes if not n.warnings.not_transmitting]
@@ -267,20 +268,18 @@ def start_event(hid: str) -> str:
     eid = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
 
-    event = EventDoc(
-        hid=hid,
-        started_at=now,
-        ended_at=None,
-        dismissed_by_user=False,
-        false_alarm=None,
+    event = EventDoc(hid=hid, started_at=now, ended_at=None, dismissed_by_user=False, false_alarm=None)
+
+    (
+        db.collection("home_events").document(hid)
+        .collection("events").document(eid)
+        .set(event.model_dump(by_alias=True))
     )
-    db.collection("events").document(eid).set(event.model_dump(by_alias=True))
     set_active_event(hid, eid)
-    print(f"[DB] Event started: {eid} for home {hid}")
 
     return eid
 
-def update_event(eid: str, chunk: list[Package]):
+def update_event(hid: str, eid: str, chunk: list[Package]): # TODO MAKE SURE YOU PASS HID IN THE FUNCITON
     if not chunk:
         return
 
@@ -315,16 +314,48 @@ def update_event(eid: str, chunk: list[Package]):
         ],
     }
 
-    db.collection("events").document(eid).collection("chunks").add(chunk_data) # TODO DISCUTAT STRUCTURA ALTERNATIVA (collection("home_events").document(hid).collection("events").document(eid).collection("chunks").document(cid))
+    chunk_index = _event_chunk_counters.get(eid, 0)
+    cid = f"{chunk_index:05d}"
+    _event_chunk_counters[eid] = chunk_index + 1
+
+    (
+        db.collection("home_events")
+        .document(hid)
+        .collection("events")
+        .document(eid)
+        .collection("chunks")
+        .document(cid)
+        .set(chunk_data)
+    )   
     print(f"[DB] Event {eid}: chunks saved ({len(chunk)} packages)")
 
 
 def close_event(hid: str, eid: str):
-    db.collection("events").document(eid).update({
-        "endedAt": datetime.now(timezone.utc)
-    })
+    (
+        db.collection("home_events").document(hid)
+        .collection("events").document(eid)
+        .update({"endedAt": datetime.now(timezone.utc)})
+    )
     set_active_event(hid, None)
+    _event_chunk_counters.pop(eid, None)   
+
     print(f"[DB] Event closed: {eid}")
+
+
+def revert_node_requested_armed(hid: str, node_id: str):
+    node = get_node(hid, node_id)
+    if not node:
+        return
+    
+    db.collection("nodes").document(f"{hid}_{node_id}").update({
+        "requestedArmed": node.get("armed", False)
+    })
+
+def clear_node_requested_reboot(hid: str, node_id: str):
+    db.collection("nodes").document(f"{hid}_{node_id}").update({"requestedReboot": False})
+
+def clear_node_requested_deep_sleep(hid: str, node_id: str):
+    db.collection("nodes").document(f"{hid}_{node_id}").update({"requestedDeepSleep": False})
 
 
     # TODO de vazut daca e mai ok ca events sa fie tinute in functie de eid sau de hid si dupa de eid

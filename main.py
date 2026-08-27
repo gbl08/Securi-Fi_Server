@@ -16,6 +16,7 @@ from database import (
     get_node, get_nodes_for_home,
     set_node_armed, set_node_requested_armed,
     start_event, update_event, close_event,
+    revert_node_requested_armed, clear_node_requested_reboot, clear_node_requested_deep_sleep,
     db,
 )
 # from notifications import notify_home # NU IN MVP4
@@ -39,55 +40,54 @@ mqtt_client: mqtt.Client = None
 
 
 # mqtt send:
-def send_config_command(master_mac: str, node_id: str, armed: bool):
+def send_config_command(master_mac: str, node_id: str, *, arm=False, disarm=False, reboot=False, deep_sleep=False):
     if mqtt_client is None:
-        print(f"[MQTT] Cannot send command, mqtt client not ready")
+        print("[MQTT] Cannot send command, mqtt client not ready")
         return
 
     topic = TOPIC_CONFIG_COMMAND.format(mac=master_mac)
-    payload = NodeConfigCommand(
-        node_id=node_id,
-        cmd="arm" if armed else "standby"
-    )
+    payload = NodeConfigCommand(node_id=node_id, arm=arm, disarm=disarm, reboot=reboot, deep_sleep=deep_sleep)
 
-    try: 
+    try:
         mqtt_client.publish(topic, json.dumps(payload.model_dump()))
-        print(f"[MQTT] Config command sent: node={node_id} cmd={'arm' if armed else 'standby'} -> {topic}")
+        action = "arm" if arm else "disarm" if disarm else "reboot" if reboot else "deep_sleep" if deep_sleep else "none"
+        print(f"[MQTT] Config command sent: node={node_id} action={action} -> {topic}")
     except Exception as e:
         print(f"[MQTT] Failed to send config command: {e}")
 
 
-# requestedArmed shit
+# change in the database
 def on_nodes_snapshot(col_snapshot, changes, read_time):
-    for change in changes: 
+    for change in changes:
         doc = change.document
         data = doc.to_dict()
 
-        requested = data.get("requestedArmed", False)
-        current = data.get("armed", False)
-
-        if requested == current:
-            continue
-
         hid = data.get("hid")
         node_id = data.get("nodeId")
-
         if not hid or not node_id:
-            print(f"[SNAPSHOT] Node doc {doc.id} missing hid or nodeId")
             continue
 
         home = get_home(hid)
         if not home:
-            print(f"[SNAPSHOT] Home {hid} not found for node {node_id}")
             continue
-
         master_mac = home.get("masterMac")
         if not master_mac:
-            print(f"[SNAPSHOT] Home {hid} has no masterMac")
             continue
 
-        print(f"[SNAPSHOT] Node {node_id} mismatch: requestedArmed={requested} armed={current}. Sending command...")
-        send_config_command(master_mac, node_id, requested)
+        requested_armed = data.get("requestedArmed", False)
+        current_armed = data.get("armed", False)
+
+        if requested_armed != current_armed:
+            print(f"[SNAPSHOT] Node {node_id} arm mismatch: requested={requested_armed} current={current_armed}")
+            send_config_command(master_mac, node_id, arm=requested_armed, disarm=not requested_armed)
+
+        if data.get("requestedReboot", False):
+            print(f"[SNAPSHOT] Node {node_id} reboot requested")
+            send_config_command(master_mac, node_id, reboot=True)
+
+        if data.get("requestedDeepSleep", False):
+            print(f"[SNAPSHOT] Node {node_id} deep sleep requested")
+            send_config_command(master_mac, node_id, deep_sleep=True)        
 
 def start_firestore_listener():
     db.collection("nodes").on_snapshot(on_nodes_snapshot)
@@ -213,8 +213,8 @@ async def handle_config_request(master_mac: str, raw: dict):
 
 
 # config confirmation handler
-async def handle_config_confirmation(master_mac: str, raw: dict):
-    try: 
+async def handle_config_confirmation(master_mac: str, raw: dict): # TODO RESCRIS LOGICA, ARM, DISARM, BLA BLA E COMANDA NU STATE-UL CARE TREBUIE SA FIE 
+    try:
         conf = NodeConfigConfirmation(**raw)
     except Exception as e:
         print(f"[SERVER] Invalid config confirmation: {e}")
@@ -222,16 +222,28 @@ async def handle_config_confirmation(master_mac: str, raw: dict):
 
     home = get_home_by_mac(master_mac)
     if not home:
-        print(f"[SERVER] Config confirmation from unknown MAC {master_mac}")
         return
-
-    if not conf.success:
-        print(f"[SERVER] Node {conf.node_id} FAILED to execute command. Armed state remains unchanged")
-        return
-
     hid = home.get("hid")
-    set_node_armed(hid, conf.node_id, conf.armed)
-    print(f"[SERVER] Node {conf.node_id} confirmed armed={conf.armed}")
+
+    if conf.arm or conf.disarm:
+        target_armed = conf.arm
+        if conf.success:
+            set_node_armed(hid, conf.node_id, target_armed)
+            print(f"[SERVER] Node {conf.node_id} confirmed armed={target_armed}")
+        else:
+            revert_node_requested_armed(hid, conf.node_id)
+            print(f"[SERVER] Node {conf.node_id} FAILED to {'arm' if target_armed else 'disarm'}; requestedArmed reverted")
+
+    elif conf.reboot:
+        clear_node_requested_reboot(hid, conf.node_id)
+        print(f"[SERVER] Node {conf.node_id} reboot {'confirmed' if conf.success else 'FAILED'}")
+
+    elif conf.deep_sleep:
+        clear_node_requested_deep_sleep(hid, conf.node_id)
+        print(f"[SERVER] Node {conf.node_id} deep sleep {'confirmed' if conf.success else 'FAILED'}")
+
+    else:
+        print(f"[SERVER] Node {conf.node_id} confirmation with no action bool set — ignoring")
 
 
 # disaster helper:
