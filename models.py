@@ -50,7 +50,13 @@ class NodeConfigConfirmation(BaseModel):
     node_id: str
     master_mac: str
 
-    armed: bool
+    # ce vrei sa schimbi = 1, restul 0
+    arm: bool
+    disarm: bool
+    deep_sleep: bool
+    reboot: bool
+    # etc
+
     success: bool
 
 # docs: 

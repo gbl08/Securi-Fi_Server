@@ -1,34 +1,21 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from contextlib import asynccontextmanager
-
 import asyncio
 import json
 import threading
 import time
-
-import paho.mqtt.client as mqtt 
+import paho.mqtt.client as mqtt
 from datetime import datetime, timezone
-
+ 
 from models import Package, NodeConfigRequest, NodeConfigCommand, NodeConfigConfirmation
 from database import (
-    get_home,
-    get_home_by_mac,
-    create_home, 
-    touch_home_last_seen,
-
-    set_active_event,
-    write_cache,
-    analyse_cache,
-    upsert_node,
-
-    update_node_warnings,
-    get_node,
-    get_nodes_for_home,
-    set_node_armed,
-    set_node_requested_armed,
-
-    start_event,
-    close_event,
+    get_home_by_mac, get_home, create_home,
+    touch_home_last_seen, set_active_event,
+    write_cache, analyse_cache,
+    upsert_node, update_node_warnings,
+    get_node, get_nodes_for_home,
+    set_node_armed, set_node_requested_armed,
+    start_event, update_event, close_event,
     db,
 )
 # from notifications import notify_home # NU IN MVP4
@@ -43,7 +30,7 @@ TOPIC_TELEMETRY = "securifi/master"
 TOPIC_CONFIG_REQUEST = "securifi/config/request/#" # pt cand isi cere esp-ul state-ul la inceput
 TOPIC_CONFIG_CONFIRM = "securifi/config/confirm/#" # pt cand confirma esp-ul o comanda
 
-TOPIC_CONFIG_COMMAND = "securifi/config/command/{mac}"
+TOPIC_CONFIG_COMMAND = "securifi/config/command/{mac}" # server -> esp
 
 
 # global state:
@@ -51,7 +38,7 @@ loop: asyncio.AbstractEventLoop = None
 mqtt_client: mqtt.Client = None
 
 
-# mqtt send helper:
+# mqtt send:
 def send_config_command(master_mac: str, node_id: str, armed: bool):
     if mqtt_client is None:
         print(f"[MQTT] Cannot send command, mqtt client not ready")
@@ -61,10 +48,10 @@ def send_config_command(master_mac: str, node_id: str, armed: bool):
     payload = NodeConfigCommand(
         node_id=node_id,
         cmd="arm" if armed else "standby"
-    ).model_dump()
+    )
 
     try: 
-        mqtt_client.publish(topic, json.dumps(payload))
+        mqtt_client.publish(topic, json.dumps(payload.model_dump()))
         print(f"[MQTT] Config command sent: node={node_id} cmd={'arm' if armed else 'standby'} -> {topic}")
     except Exception as e:
         print(f"[MQTT] Failed to send config command: {e}")
@@ -126,7 +113,7 @@ async def handle_package(raw: dict):
 
         hid = create_home(pkg.master_mac)
         home = get_home(hid)
-        home["hid"] = "hid"
+        home["hid"] = hid
 
     hid = home["hid"]
 
@@ -142,24 +129,25 @@ async def handle_package(raw: dict):
             signal_weak=node.warnings.signal_weak
         )
 
-    # write cache + in-memory analysis
-    write_cache(hid, pkg)
-    analysis = analyse_cache(hid, pkg)
-
-
     # disaster detection 
     disaster_type = _get_disaster_type(pkg)
     if disaster_type:
         active_eid = home.get("activeEventId")
         if not active_eid:
-            eid = start_event(hid, 1.0)
+            eid = start_event(hid)
             print(f"[SERVER] Disaster event started ({disaster_type}): {eid}")
             # await notify_home(hid, disaster_type, 1.0) # nu in MVP4
-        else:
-            pass # update_event
+
+        active_eid = home.get("activeEventId") or eid
+        update_event(active_eid, [pkg])
 
         touch_home_last_seen(hid)
         return
+
+    # write cache + in-memory analysis
+    analysis = analyse_cache(hid, pkg)
+    is_alarm = write_cache(hid, pkg, analysis["current_window"])
+    
 
     # intruder event lifecycle
     active_eid = home.get("activeEventId")
@@ -167,25 +155,34 @@ async def handle_package(raw: dict):
     if analysis["is_threat"]:
         if not active_eid:
             eid = start_event(hid)
+            active_eid = eid
             print(f"[SERVER] Intruder event started: {eid}")
-        else:
-            pass # update_event
+
+        if analysis["flushed"] and analysis["flushed_chunk"]:
+            update_event(active_eid, analysis["flushed_chunk"])
+
+    elif analysis["flushed"] and active_eid:
+        update_event(active_eid, analysis["flushed_chunk"])
+        if analysis["should_close_session"]:
+            close_event(hid, active_eid)
+            
     elif analysis["should_close_session"] and active_eid:
         close_event(hid, active_eid)
 
 
     # log node warning:
     for node in pkg.nodes:
-        active_warnings = [
+        active = [
             w for w, v in [
                 ("low_battery", node.warnings.low_battery),
                 ("not_transmitting", node.warnings.not_transmitting),
                 ("signal_weak", node.warnings.signal_weak),
             ] if v
         ]
-        if active_warnings:
-            print(f"[SERVER] Node {node.node_id} warnings: {active_warnings}")
+        if active:
+            print(f"[SERVER] Node {node.node_id} warnings: {active}")
 
+    # touching last seen: 
     touch_home_last_seen(hid)
 
 
