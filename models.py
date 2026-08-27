@@ -21,7 +21,6 @@ class NodeReading(BaseModel):
     armed: Optional[bool] = None
 
     movement_pct: int # 0 - 200
-
     raw_mq2_reading: int
 
     warnings: NodeWarning
@@ -30,8 +29,6 @@ class NodeReading(BaseModel):
 class Package(BaseModel):
     master_mac: str
     timestamp: str
-
-    intruder_probability: float = Field(ge=0.0, le=1.0)
 
     warning_type: Optional[str] = None
     nodes: List[NodeReading]
@@ -99,23 +96,25 @@ class CacheSensorsDoc(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
-class CacheReadingDoc(BaseModel):
+class CacheNodeReadingDoc(BaseModel):
     state: str
 
-    sensors: CacheSensorsDoc
     raw_mq2_reading: int = Field(alias="rawMq2Reading")
     movement_pct: int = Field(alias="movementPct")
+    is_warning: bool = Field(alias="isWarning") # inca nush daca asta ramane sau nu
+
+    sensors: CacheSensorsDoc
 
     model_config = ConfigDict(populate_by_name=True)
 
 
 class CacheDoc(BaseModel):
-    above_treshold: int # asta folosesti drept "probability"
-    is_alarm: bool # daca cache-ul in sine ar trebui sa inceapa un nou event sau nu
+    above_treshold: int = Field(alias="aboveTreshold")# asta folosesti drept "probability"
+    is_alarm: bool = Field(alias="isAlarm") # daca cache-ul in sine ar trebui sa inceapa un nou event sau nu
 
-    window_size: int 
+    window_size: int = Field(alias="windowSize")
 
-    node_readings: dict[str, CacheReadingDoc] = Field(alias="nodeReadings")
+    node_readings: dict[str, CacheNodeReadingDoc] = Field(alias="nodeReadings")
     updated_at: datetime = Field(alias="updatedAt")
 
     model_config = ConfigDict(populate_by_name=True)
