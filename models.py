@@ -107,7 +107,7 @@ class CacheNodeReadingDoc(BaseModel):
 
     raw_mq2_reading: int = Field(alias="rawMq2Reading")
     movement_pct: int = Field(alias="movementPct")
-    is_warning: bool = Field(alias="isWarning") # inca nush daca asta ramane sau nu
+    is_alarm: bool = Field(alias="isAlarm") # inca nush daca asta ramane sau nu
 
     sensors: CacheSensorsDoc
 
@@ -115,7 +115,7 @@ class CacheNodeReadingDoc(BaseModel):
 
 
 class CacheDoc(BaseModel):
-    above_treshold: int = Field(alias="aboveTreshold")# asta folosesti drept "probability"
+    above_threshold: int = Field(alias="aboveThreshold")# asta folosesti drept "probability"
     is_alarm: bool = Field(alias="isAlarm") # daca cache-ul in sine ar trebui sa inceapa un nou event sau nu
 
     window_size: int = Field(alias="windowSize")

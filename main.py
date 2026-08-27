@@ -158,10 +158,10 @@ async def handle_package(raw: dict):
             active_eid = eid
             print(f"[SERVER] Intruder event started: {eid}")
 
-        if analysis["flushed"] and analysis["flushed_chunk"]:
+        if analysis.get("flushed") and analysis.get("flushed_chunk"):
             update_event(active_eid, analysis["flushed_chunk"])
 
-    elif analysis["flushed"] and active_eid:
+    elif analysis.get("flushed") and active_eid:
         update_event(active_eid, analysis["flushed_chunk"])
         if analysis["should_close_session"]:
             close_event(hid, active_eid)

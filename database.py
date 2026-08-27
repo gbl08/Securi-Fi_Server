@@ -163,30 +163,53 @@ def get_nodes_for_home(hid: str) -> list[dict]:
 
 
 # cache & threat analysis
+#constants:
 MOVEMENT_THRESHOLD = 140
+ALARM_SINGLE_STRONG = 180 # TODO Push back la idea ca daca unul e puternic atunci sigur e warning
+ALARM_MULTI_COUNT = 2
 THREAT_COUNT = 3
+
 _package_windows: dict[str, list[Package]] = {}
-_idle_streaks: dict[str, int] = {}
 
-def node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]: # TODO DE RESCRIS LOGICA
-    # de modificat logica, deocamndata daca 2 node readings sunt peste THRESHOLD este considerat warning, nush ce formula sa bagam ca sa scoatem din 4 movement_pct 1
+def node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]: # (package_movement_pct, is_alarm) # TODO logica mai buna ca asta mi se pare shit
+    active_nodes = [
+        node for node in pkg.nodes
+        if not node.warnings.not_transmitting
+    ]
 
-    over_THRESHOLD = sum(
-        1
-        for node in pkg.nodes
+    if not active_nodes:
+        return (0, False)
+
+    total_weight = sum(node.movement_pct for node in active_nodes)
+    if total_weight == 0:
+        package_movement_pct = 0
+    else:
+        package_movement_pct = int(
+            sum(node.movement_pct * node.movement_pct for node in active_nodes) / total_weight
+        )
+        package_movement_pct = min(200, max(0, package_movement_pct))
+
+    over_threshold = [
+        node for node in active_nodes
         if node.movement_pct >= MOVEMENT_THRESHOLD
-        and not node.warnings.not_transmitting)
+    ]
 
-    is_alarm = over_THRESHOLD > 1
-    new_movement_pct = 0 # idfk
+    is_alarm = (
+        any(node.movement_pct >= ALARM_SINGLE_STRONG for node in active_nodes) 
+        or len(over_threshold) >= ALARM_MULTI_COUNT
+        or package_movement_pct >= MOVEMENT_THRESHOLD
+    )
 
-    return (new_movement_pct, is_alarm)
+    return (package_movement_pct, is_alarm)
+    
+
 
 
 def write_cache(hid: str, package: Package, window: list[Package]):
     package_movement_pct, is_alarm = node_readings_to_package_reading_and_alarm(package) 
 
     cache = CacheDoc(
+        above_threshold=None, # TODO ar trebui sa scoatem de undeva toate pachetele din cache care sunt above_threshold / vechiul above_threshold la care adaugam  
         is_alarm=is_alarm,
         window_size=len(window),
         node_readings={
@@ -240,7 +263,7 @@ def analyse_cache(hid: str, package: Package) -> dict:
         "above_threshold": alarm_count,
         "should_close_session": idle_streak >= IDLE_CLOSE_COUNT,
         "window_size": len(window),
-        "window": window,
+        "current_window": window,
 
         "flushed": flushed,
         "flushed_chunk": flushed_chunk
@@ -300,7 +323,8 @@ def update_event(eid: str, chunk: list[Package]):
         ],
     }
 
-    # TODO de dat add in db corect
+    db.collection("events").document(eid).collection("chuncks").add(chunk_data) # TODO DISCUTAT STRUCTURA ALTERNATIVA (collection("home_events").document(hid).collection("events").document(eid).collection("chuncks").document(cid))
+    print(f"[DB] Event {eid}: chunks saved ({len(chunk)} packages)")
 
 
 def close_event(hid: str, eid: str):
@@ -309,3 +333,6 @@ def close_event(hid: str, eid: str):
     })
     set_active_event(hid, None)
     print(f"[DB] Event closed: {eid}")
+
+
+    # TODO de vazut daca e mai ok ca events sa fie tinute in functie de eid sau de hid si dupa de eid
