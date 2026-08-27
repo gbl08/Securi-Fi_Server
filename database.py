@@ -10,7 +10,7 @@ from models import (
     NodeDoc,
     NodeWarningDoc,
     CacheDoc,
-    CacheReadingDoc,
+    CacheNodeReadingDoc,
     CacheSensorsDoc,
     EventDoc,
 )
@@ -81,24 +81,22 @@ def upsert_node(hid: str, node_id: str, role: str, nickname: Optional[str] = Non
     doc_ref = db.collection("nodes").document(doc_id)
     existing = doc_ref.get()
 
-    existing_data = existing.to_dict() if existing else {}
+    existing_data = existing.to_dict() if existing.exists else {}
 
     node = NodeDoc(
         hid=hid,
         node_id=node_id,
-        nickname=nickname or (
-            existing.to_dict().get("nickname") if existing.exists else node_id
-        ),
+
+        nickname=nickname or existing_data.get("nickname", node_id),
         role=role,
+
         warnings=NodeWarningDoc(
             low_battery=False,
             not_transmitting=False,
-            signal_weak=False
+            signal_weak=False,
         ),
-        armed=(existing.to_dict().get("armed", False) if existing.exists else False),
-        requested_armed=(
-            existing.to_dict().get("requestedArmed", False) if existing.exists else False
-        )
+        armed=existing_data.get("armed", False),
+        requested_armed=existing_data.get("requestedArmed", False),
     )
 
     doc_ref.set(node.model_dump(by_alias=True), merge=True)
@@ -165,21 +163,39 @@ def get_nodes_for_home(hid: str) -> list[dict]:
 
 
 # cache & threat analysis
+MOVEMENT_THRESHOLD = 140
+THREAT_COUNT = 3
 _package_windows: dict[str, list[Package]] = {}
+_idle_streaks: dict[str, int] = {}
+
+def node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]: # TODO DE RESCRIS LOGICA
+    # de modificat logica, deocamndata daca 2 node readings sunt peste THRESHOLD este considerat warning, nush ce formula sa bagam ca sa scoatem din 4 movement_pct 1
+
+    over_THRESHOLD = sum(
+        1
+        for node in pkg.nodes
+        if node.movement_pct >= MOVEMENT_THRESHOLD
+        and not node.warnings.not_transmitting)
+
+    is_alarm = over_THRESHOLD > 1
+    new_movement_pct = 0 # idfk
+
+    return (new_movement_pct, is_alarm)
 
 
-def write_cache(hid: str, package: Package):
+def write_cache(hid: str, package: Package, window: list[Package]):
+    package_movement_pct, is_alarm = node_readings_to_package_reading_and_alarm(package) 
+
     cache = CacheDoc(
-        overall_reading=package.intruder_probability,
+        is_alarm=is_alarm,
+        window_size=len(window),
         node_readings={
-            node.node_id: CacheReadingDoc(
-                probability=node.probability,
+            node.node_id: CacheNodeReadingDoc(
                 state=node.state,
-
-                sensors=CacheSensorsDoc(flame=node.sensors.flame, gas=node.sensors.gas, battery_pct=node.sensors.battery_pct),
-
-                raw_mq2_reading=node.raw_mq2_reading,
                 movement_pct=node.movement_pct,
+                raw_mq2_reading=node.raw_mq2_reading,
+                is_alarm=node.movement_pct >= MOVEMENT_THRESHOLD,
+                sensors=node.sensors
             )
             for node in package.nodes
         },
@@ -187,33 +203,47 @@ def write_cache(hid: str, package: Package):
     )
     db.collection("cache").document(hid).set(cache.model_dump(by_alias=True))
 
+    return is_alarm
+
 
 def analyse_cache(hid: str, package: Package) -> dict:
     window = _package_windows.setdefault(hid, [])
     window.append(package)
 
+    flushed = False
+    flushed_chunk = None
+
     if len(window) > MAX_CACHE:
-        window.pop(0)
+        flushed = True
+        flushed_chunk = list(window)
+        window.clear()
 
-    package_treshold = 140
+    current_window = flushed_chunk if flushed else window
+    alarm_count = 0
+    for p in current_window:
+        m_pct, is_a = node_readings_to_package_reading_and_alarm(p)
+        if is_a:
+            alarm_count += 1
 
-    above_threshold = sum(
-        1 for p in window if p.package_movement_pct >= package_treshold
-    )
+    is_threat = alarm_count >= THREAT_COUNT
 
     idle_streak = 0
     for p in reversed(window):
-        if p.package_movement_pct < package_treshold and p.warning_type is None:
+        _, is_alarm = node_readings_to_package_reading_and_alarm(p) # TODO IN LOC SA RECALCULAM LA FIECARE ITERATIE SA CONTINA P O VARIABILA IS_ARMED PE CARE O SETAM SI REFOLOSIM
+        if not is_alarm and p.warning_type is None:
             idle_streak += 1
         else:
             break
 
     return {
-        "is_threat": above_threshold >= 3,    
-        "above_threshold": above_threshold,
+        "is_threat": alarm_count >= 3,    
+        "above_threshold": alarm_count,
         "should_close_session": idle_streak >= IDLE_CLOSE_COUNT,
         "window_size": len(window),
         "window": window,
+
+        "flushed": flushed,
+        "flushed_chunk": flushed_chunk
     }
 
 
@@ -234,6 +264,44 @@ def start_event(hid: str) -> str:
     print(f"[DB] Event started: {eid} for home {hid}")
 
     return eid
+
+def update_event(eid: str, chunk: list[Package]):
+    if not chunk:
+        return
+
+    chunk_data = {
+        "savedAt": datetime.now(timezone.utc).isoformat(),
+        "packages": [
+            {
+                "timestamp":   p.timestamp,
+                "warning_type": p.warning_type,
+                "nodes": [
+                    {
+                        "node_id":         n.node_id,
+                        "state":           n.state,
+                        "movement_pct":    n.movement_pct,
+                        "raw_mq2_reading": n.raw_mq2_reading,
+                        "is_warning":      n.movement_pct >= MOVEMENT_THRESHOLD,
+                        "warnings": {
+                            "low_battery":      n.warnings.low_battery,
+                            "not_transmitting": n.warnings.not_transmitting,
+                            "signal_weak":      n.warnings.signal_weak,
+                        },
+                        "sensors": {
+                            "flame":       n.sensors.flame,
+                            "gas":         n.sensors.gas,
+                            "battery_pct": n.sensors.battery_pct,
+                        },
+                    }
+                    for n in p.nodes
+                ],
+            }
+            for p in chunk
+        ],
+    }
+
+    # TODO de dat add in db corect
+
 
 def close_event(hid: str, eid: str):
     db.collection("events").document(eid).update({

@@ -43,7 +43,7 @@ TOPIC_TELEMETRY = "securifi/master"
 TOPIC_CONFIG_REQUEST = "securifi/config/request/#" # pt cand isi cere esp-ul state-ul la inceput
 TOPIC_CONFIG_CONFIRM = "securifi/config/confirm/#" # pt cand confirma esp-ul o comanda
 
-TOPIC_CONFIG_COMMAND = "securifi/config/comamnd/{mac}"
+TOPIC_CONFIG_COMMAND = "securifi/config/command/{mac}"
 
 
 # global state:
