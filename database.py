@@ -171,33 +171,25 @@ THREAT_COUNT = 3
 
 _package_windows: dict[str, list[Package]] = {}
 
-def node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]: # (package_movement_pct, is_alarm) # TODO logica mai buna ca asta mi se pare shit
-    active_nodes = [
-        node for node in pkg.nodes
-        if not node.warnings.not_transmitting
-    ]
-
+def node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]: # TODO testat, fine tune
+    active_nodes = [n for n in pkg.nodes if not n.warnings.not_transmitting]
     if not active_nodes:
         return (0, False)
 
-    total_weight = sum(node.movement_pct for node in active_nodes)
-    if total_weight == 0:
-        package_movement_pct = 0
-    else:
-        package_movement_pct = int(
-            sum(node.movement_pct * node.movement_pct for node in active_nodes) / total_weight
-        )
-        package_movement_pct = min(200, max(0, package_movement_pct))
+    readings = sorted((n.movement_pct for n in active_nodes), reverse=True)
 
-    over_threshold = [
-        node for node in active_nodes
-        if node.movement_pct >= MOVEMENT_THRESHOLD
-    ]
+    if len(readings) == 1:
+        package_movement_pct = readings[0]
+    else:
+        package_movement_pct = (readings[0] + readings[1]) // 2
+
+    package_movement_pct = min(200, max(0, package_movement_pct))
+
+    over_threshold = sum(1 for r in readings if r >= MOVEMENT_THRESHOLD)
 
     is_alarm = (
-        any(node.movement_pct >= ALARM_SINGLE_STRONG for node in active_nodes) 
-        or len(over_threshold) >= ALARM_MULTI_COUNT
-        or package_movement_pct >= MOVEMENT_THRESHOLD
+        package_movement_pct >= MOVEMENT_THRESHOLD
+        or over_threshold >= ALARM_MULTI_COUNT
     )
 
     return (package_movement_pct, is_alarm)
@@ -218,7 +210,7 @@ def write_cache(hid: str, package: Package, window: list[Package]):
                 movement_pct=node.movement_pct,
                 raw_mq2_reading=node.raw_mq2_reading,
                 is_alarm=node.movement_pct >= MOVEMENT_THRESHOLD,
-                sensors=node.sensors
+                sensors=node.sensors # TODO da pass la NodeSensors in loc de CacheSensorsDoc sa se renunte la chchesensdoc sau sa se faca cv ca altfel pusca
             )
             for node in package.nodes
         },
@@ -304,7 +296,7 @@ def update_event(eid: str, chunk: list[Package]):
                         "state":           n.state,
                         "movement_pct":    n.movement_pct,
                         "raw_mq2_reading": n.raw_mq2_reading,
-                        "is_warning":      n.movement_pct >= MOVEMENT_THRESHOLD,
+                        "is_alarm":      n.movement_pct >= MOVEMENT_THRESHOLD,
                         "warnings": {
                             "low_battery":      n.warnings.low_battery,
                             "not_transmitting": n.warnings.not_transmitting,
@@ -323,7 +315,7 @@ def update_event(eid: str, chunk: list[Package]):
         ],
     }
 
-    db.collection("events").document(eid).collection("chuncks").add(chunk_data) # TODO DISCUTAT STRUCTURA ALTERNATIVA (collection("home_events").document(hid).collection("events").document(eid).collection("chuncks").document(cid))
+    db.collection("events").document(eid).collection("chunks").add(chunk_data) # TODO DISCUTAT STRUCTURA ALTERNATIVA (collection("home_events").document(hid).collection("events").document(eid).collection("chunks").document(cid))
     print(f"[DB] Event {eid}: chunks saved ({len(chunk)} packages)")
 
 

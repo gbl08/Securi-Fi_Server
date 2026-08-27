@@ -97,7 +97,7 @@ def start_firestore_listener():
         time.sleep(3600)
 
 
-# telememtry handler;
+# telemetry handler;
 async def handle_package(raw: dict):
     # validate:
     try:

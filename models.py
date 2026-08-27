@@ -33,8 +33,6 @@ class Package(BaseModel):
     warning_type: Optional[str] = None
     nodes: List[NodeReading]
 
-    package_movement_pct: int # cv formula magica ca sa scoatem un overall movement_pct? 
-
 
 
 # config protocol models: 
@@ -51,8 +49,8 @@ class NodeConfigConfirmation(BaseModel):
     master_mac: str
 
     # ce vrei sa schimbi = 1, restul 0
-    arm: bool
-    disarm: bool
+    armed: bool
+    disarmed: bool
     deep_sleep: bool
     reboot: bool
     # etc
