@@ -239,11 +239,8 @@ def _get_disaster_type(pkg: Package) -> str | None:
     has_flame = any(n.sensors.flame for n in pkg.nodes)
     has_gas = any(n.sensors.gas for n in pkg.nodes)
 
-    if has_flame:
-        return "flame"
-    if has_gas:
-        return "gas"
-
+    if has_flame: return "flame"
+    if has_gas: return "gas"
     return None
 
 
