@@ -165,7 +165,6 @@ def get_nodes_for_home(hid: str) -> list[dict]:
 # cache & threat analysis
 #constants:
 MOVEMENT_THRESHOLD = 140
-ALARM_SINGLE_STRONG = 180 # TODO Push back la idea ca daca unul e puternic atunci sigur e warning
 ALARM_MULTI_COUNT = 2
 THREAT_COUNT = 3
 
@@ -198,13 +197,13 @@ def node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]
 
 
 
-def write_cache(hid: str, package: Package, window: list[Package]):
+def write_cache(hid: str, package: Package, analysis: dict):
     package_movement_pct, is_alarm = node_readings_to_package_reading_and_alarm(package) 
 
     cache = CacheDoc(
-        above_threshold=None, # TODO ar trebui sa scoatem de undeva toate pachetele din cache care sunt above_threshold / vechiul above_threshold la care adaugam  
+        above_threshold=analysis["above_threshold"],   
         is_alarm=is_alarm,
-        window_size=len(window),
+        window_size=len(analysis["window"]),
         node_readings={
             node.node_id: CacheNodeReadingDoc(
                 state=node.state,
@@ -279,7 +278,7 @@ def start_event(hid: str) -> str:
 
     return eid
 
-def update_event(hid: str, eid: str, chunk: list[Package]): # TODO MAKE SURE YOU PASS HID IN THE FUNCITON
+def update_event(hid: str, eid: str, chunk: list[Package]): # TODO MAKE SURE YOU PASS HID WHEN CALLING THE FUNCITON
     if not chunk:
         return
 
@@ -356,6 +355,3 @@ def clear_node_requested_reboot(hid: str, node_id: str):
 
 def clear_node_requested_deep_sleep(hid: str, node_id: str):
     db.collection("nodes").document(f"{hid}_{node_id}").update({"requestedDeepSleep": False})
-
-
-    # TODO de vazut daca e mai ok ca events sa fie tinute in functie de eid sau de hid si dupa de eid

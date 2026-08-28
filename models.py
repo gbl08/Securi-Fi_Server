@@ -40,11 +40,12 @@ class NodeConfigRequest(BaseModel):
     node_id: str
     master_mac: str
 
-    cmd: str = None # "arm" | "disarm" | "reboot" | "deep_sleep"
+    
 
 class NodeConfigCommand(BaseModel):
     node_id: str
-    cmd: str
+
+    cmd: str = None # "arm" | "disarm" | "reboot" | "deep_sleep"
 
 class NodeConfigConfirmation(BaseModel):
     node_id: str
