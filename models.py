@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
+from dataclasses import dataclass
 
 
 # node & package stuff: 
@@ -45,13 +46,13 @@ class NodeConfigRequest(BaseModel):
 class NodeConfigCommand(BaseModel):
     node_id: str
 
-    cmd: str = None # "arm" | "disarm" | "reboot" | "deep_sleep"
+    cmd: Optional[str] = None # "arm" | "disarm" | "reboot" | "deep_sleep"
 
 class NodeConfigConfirmation(BaseModel):
     node_id: str
     master_mac: str
 
-    cmd: str = None # "arm" | "disarm" | "reboot" | "deep_sleep"
+    cmd: Optional[str] = None # "arm" | "disarm" | "reboot" | "deep_sleep"
 
     success: bool
 
@@ -111,12 +112,13 @@ class CacheNodeReadingDoc(BaseModel):
 
 
 class CacheDoc(BaseModel):
-    above_threshold: int = Field(alias="aboveThreshold")# asta folosesti drept "probability"
+    alarm_count: int = Field(alias="alarmCount")# asta folosesti drept "probability"
+    idle_Streak: int = Field(alias="idleStreak")
     is_alarm: bool = Field(alias="isAlarm") # daca cache-ul in sine ar trebui sa inceapa un nou event sau nu
 
-    window_size: int = Field(alias="windowSize")
+    packages: list[Package]
 
-    node_readings: dict[str, CacheNodeReadingDoc] = Field(alias="nodeReadings")
+    # node_readings: dict[str, CacheNodeReadingDoc] = Field(alias="nodeReadings")
     updated_at: datetime = Field(alias="updatedAt")
 
     model_config = ConfigDict(populate_by_name=True)
@@ -134,7 +136,10 @@ class EventDoc(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
-# in database in events va fi gen:
-# hid, startedAt, endedAt, dismissedByUser
-# si un subcollection packages/{auto_id} unde sa dea push cache la chunk-uri de package-uri cand e plin
+# cache
+@dataclass
+class CacheEntry:
+    package: Package
 
+    package_movement_pct: int
+    is_alarm: bool

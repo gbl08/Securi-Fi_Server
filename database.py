@@ -13,6 +13,7 @@ from models import (
     CacheNodeReadingDoc,
     CacheSensorsDoc,
     EventDoc,
+    CacheEntry
 )
 
 # setup: 
@@ -168,9 +169,6 @@ MOVEMENT_THRESHOLD = 140
 ALARM_MULTI_COUNT = 2
 THREAT_COUNT = 3
 
-_package_windows: dict[str, list[Package]] = {}
-_event_chunk_counters: dict[str, int] = {}
-
 def node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]: # TODO testat, fine tune
     active_nodes = [n for n in pkg.nodes if not n.warnings.not_transmitting]
     if not active_nodes:
@@ -193,35 +191,74 @@ def node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]
     )
 
     return (package_movement_pct, is_alarm)
-    
 
 
+_cache: dict[str, list[CacheEntry]] = {} # TODO DE TRECUT DE LA IN-MEMORY LA IN-DATABASE CA SA POATA FI ACCESAT INSTANT DE PE APP
+_event_chunk_counters: dict[str, int] = {}
 
-def write_cache(hid: str, package: Package, analysis: dict):
-    package_movement_pct, is_alarm = node_readings_to_package_reading_and_alarm(package) 
+def append_to_cache(hid: str, package: Package) -> dict:
+    entries = _cache.setdefault(hid, [])
 
+    movement_pct, is_alarm = node_readings_to_package_reading_and_alarm(package)
+    entry = CacheEntry(package=package, package_movement_pct=movement_pct, is_alarm=is_alarm)
+    entries.append(entry)
+
+    # TODO ASTEA NU SE POT VERIFICA CAND CACHE-UL E PLIN??
+    alarm_count = sum(1 for e in entries if e.is_alarm)
+    idle_streak = 0
+    for e in reversed(entries):
+        if not e.is_alarm and e.package.warning_type is None:
+            idle_streak += 1
+        else:
+            break
+
+    is_alarm = alarm_count >= THREAT_COUNT
+    should_close = idle_streak >= IDLE_CLOSE_COUNT
+
+    flushed = False
+    flushed_entries: list[CacheEntry] = []
+
+    if len(entries) >= MAX_CACHE:
+        flushed = True
+        flushed_entries = list(entries)
+        _cache[hid] = []
+
+    return {
+        "latest_entry": entry,
+        "alarm_count": alarm_count,
+        "idle_streak": idle_streak,
+        "is_alarm": is_alarm,
+        "should_close": should_close,
+        "cache_size": len(entries), 
+        "flushed": flushed,
+        "flushed_entries": flushed_entries,
+    }
+
+def write_cache(hid: str, entry: CacheEntry, analysis: dict):
     cache = CacheDoc(
-        above_threshold=analysis["above_threshold"],   
-        is_alarm=is_alarm,
-        window_size=len(analysis["window"]),
+        alarm_count=analysis["alarm_count"],
+        is_alarm=analysis["is_alarm"],
+        window_size=analysis["cache_size"],
         node_readings={
             node.node_id: CacheNodeReadingDoc(
                 state=node.state,
                 movement_pct=node.movement_pct,
                 raw_mq2_reading=node.raw_mq2_reading,
                 is_alarm=node.movement_pct >= MOVEMENT_THRESHOLD,
-                sensors=node.sensors # TODO da pass la NodeSensors in loc de CacheSensorsDoc sa se renunte la chchesensdoc sau sa se faca cv ca altfel pusca
+                sensors=CacheSensorsDoc(
+                    flame=node.sensors.flame,
+                    gas=node.sensors.gas,
+                    battery_pct=node.sensors.battery_pct,
+                )
             )
-            for node in package.nodes
+            for node in entry.package.nodes
         },
         updated_at=datetime.now(timezone.utc),
     )
     db.collection("cache").document(hid).set(cache.model_dump(by_alias=True))
 
-    return is_alarm
 
-
-def analyse_cache(hid: str, package: Package) -> dict:
+def analyse_cache(hid: str, package: Package) -> dict: # TODO RESCRIS PE NOUA STRUCTURA
     window = _package_windows.setdefault(hid, [])
     window.append(package)
 
@@ -240,19 +277,19 @@ def analyse_cache(hid: str, package: Package) -> dict:
         if is_a:
             alarm_count += 1
 
-    is_threat = alarm_count >= THREAT_COUNT
+    is_alarm = alarm_count >= THREAT_COUNT
 
     idle_streak = 0
     for p in reversed(window):
         _, is_alarm = node_readings_to_package_reading_and_alarm(p) # TODO IN LOC SA RECALCULAM LA FIECARE ITERATIE SA CONTINA P O VARIABILA IS_ARMED PE CARE O SETAM SI REFOLOSIM
         if not is_alarm and p.warning_type is None:
-            idle_streak += 1
+            idle_streak 
         else:
             break
 
     return {
-        "is_threat": alarm_count >= 3,    
-        "above_threshold": alarm_count,
+        "is_alarm": alarm_count >= 3,    
+        "alarm_count": alarm_count,
         "should_close_session": idle_streak >= IDLE_CLOSE_COUNT,
         "window_size": len(window),
         "current_window": window,
@@ -278,38 +315,40 @@ def start_event(hid: str) -> str:
 
     return eid
 
-def update_event(hid: str, eid: str, chunk: list[Package]): # TODO MAKE SURE YOU PASS HID WHEN CALLING THE FUNCITON
-    if not chunk:
+def update_event(hid: str, eid: str, entries: list[CacheEntry]): 
+    if not entries:
         return
 
     chunk_data = {
         "savedAt": datetime.now(timezone.utc).isoformat(),
         "packages": [
             {
-                "timestamp":   p.timestamp,
-                "warning_type": p.warning_type,
+                "timestamp": e.package.timestamp,
+                "warning_type": e.package.warning_type,
+                "package_movement_pct": e.package_movement_pct,
+                "is_alarm": e.is_alarm,
                 "nodes": [
                     {
-                        "node_id":         n.node_id,
-                        "state":           n.state,
-                        "movement_pct":    n.movement_pct,
+                        "node_id": n.node_id,
+                        "state": n.state,
+                        "movement_pct": n.movement_pct,
                         "raw_mq2_reading": n.raw_mq2_reading,
-                        "is_alarm":      n.movement_pct >= MOVEMENT_THRESHOLD,
+                        "is_alarm": n.movement_pct >= MOVEMENT_THRESHOLD,
                         "warnings": {
-                            "low_battery":      n.warnings.low_battery,
+                            "low_battery": n.warnings.low_battery,
                             "not_transmitting": n.warnings.not_transmitting,
-                            "signal_weak":      n.warnings.signal_weak,
+                            "signal_weak": n.warnings.signal_weak,
                         },
                         "sensors": {
-                            "flame":       n.sensors.flame,
-                            "gas":         n.sensors.gas,
+                            "flame": n.sensors.flame,
+                            "gas": n.sensors.gas,
                             "battery_pct": n.sensors.battery_pct,
                         },
                     }
-                    for n in p.nodes
+                    for n in e.package.nodes
                 ],
             }
-            for p in chunk
+            for e in entries
         ],
     }
 
@@ -326,7 +365,7 @@ def update_event(hid: str, eid: str, chunk: list[Package]): # TODO MAKE SURE YOU
         .document(cid)
         .set(chunk_data)
     )   
-    print(f"[DB] Event {eid}: chunks saved ({len(chunk)} packages)")
+    print(f"[DB] Event {eid}: chunks saved ({len(entries)} packages)")
 
 
 def close_event(hid: str, eid: str):

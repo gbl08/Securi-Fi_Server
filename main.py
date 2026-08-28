@@ -112,7 +112,7 @@ async def handle_package(raw: dict):
     # resolve / auto-create home:
     home = get_home_by_mac(pkg.master_mac)
     if not home:
-        print(f"[SERVER] Unknown MAC {pkg.master_mac}, auto-crafting home")
+        print(f"[SERVER] Unknown MAC {pkg.master_mac}, auto-creating home")
 
         hid = create_home(pkg.master_mac)
         home = get_home(hid)
@@ -137,39 +137,45 @@ async def handle_package(raw: dict):
     if disaster_type:
         active_eid = home.get("activeEventId")
         if not active_eid:
-            eid = start_event(hid)
-            print(f"[SERVER] Disaster event started ({disaster_type}): {eid}")
+            active_eid = start_event(hid)
+            print(f"[SERVER] Disaster event started ({disaster_type}): {active_eid}")
             # await notify_home(hid, disaster_type, 1.0) # nu in MVP4
 
-        active_eid = home.get("activeEventId") or eid
-        update_event(hid, active_eid, [pkg])
-
+        from models import CacheEntry
+        disaster_entry = CacheEntry(
+            package=pkg,
+            package_movement_pct=0,
+            is_alarm=False
+        ) 
+        update_event(hid, active_eid, [disaster_entry])
         touch_home_last_seen(hid)
         return
 
-    # write cache + in-memory analysis
+    # cache analysis
     analysis = analyse_cache(hid, pkg)
-    is_alarm = write_cache(hid, pkg, analysis)
-    
+    entry = analysis["latest_entry"]
+
+    write_cache(hid, entry, analysis)
 
     # intruder event lifecycle
     active_eid = home.get("activeEventId")
 
-    if analysis["is_threat"]:
-        if not active_eid:
-            eid = start_event(hid)
-            active_eid = eid
-            print(f"[SERVER] Intruder event started: {eid}")
+    if analysis["flushed"]:
+        flushed = analysis["flushed_entries"]
 
-        if analysis.get("flushed") and analysis.get("flushed_chunk"):
-            update_event(active_eid, analysis["flushed_chunk"])
+        if analysis["is_alarm"]:
+            if not active_eid:
+                active_eid = start_event(hid)
+                print(f"[SERVER] Intruder event started: {active_eid}")
+            update_event(hid, active_eid, flushed)
 
-    elif analysis.get("flushed") and active_eid:
-        update_event(active_eid, analysis["flushed_chunk"])
-        if analysis["should_close_session"]:
-            close_event(hid, active_eid)
-            
-    elif analysis["should_close_session"] and active_eid:
+        elif active_eid: # TODO VERIFICAT LOGICA LA UPDATING EVENT
+            update_event(hid, active_eid, flushed)
+            if analysis["should_close"]:
+                close_event(hid, active_eid)
+                active_eid = None
+
+    elif analysis["should_close"] and active_eid:
         close_event(hid, active_eid)
 
 
@@ -207,7 +213,7 @@ async def handle_config_request(master_mac: str, raw: dict):
 
     if not node:
         print(f"[SERVER] Config request for unknown node {req.node_id} in home {hid}. Default to standby")
-        send_config_command(master_mac, req.node_id, False)
+        send_config_command(master_mac, req.node_id, "disarm")
         return 
 
     requested_armed = node.get("requestedArmed", False)
