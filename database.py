@@ -9,7 +9,6 @@ from models import (
     HomeDoc,
     NodeDoc,
     NodeWarningDoc,
-    CacheDoc,
     CacheNodeReadingDoc,
     CacheSensorsDoc,
     EventDoc,
@@ -393,7 +392,7 @@ def close_event(hid: str, eid: str):
         .update({"endedAt": datetime.now(timezone.utc)})
     )
     set_active_event(hid, None)
-    
+
     _event_chunk_counters.pop(eid, None)
     _idle_streaks[hid] = 0
 

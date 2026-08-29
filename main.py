@@ -10,14 +10,13 @@ from datetime import datetime, timezone
 from models import Package, NodeConfigRequest, NodeConfigCommand, NodeConfigConfirmation
 from database import (
     get_home_by_mac, get_home, create_home,
-    touch_home_last_seen, set_active_event,
-    write_cache, analyse_cache,
+    touch_home_last_seen,
     upsert_node, update_node_warnings,
-    get_node, get_nodes_for_home,
-    set_node_armed, set_node_requested_armed,
+    get_node,
+    set_node_armed, 
     start_event, update_event, close_event,
     revert_node_requested_armed, clear_node_requested_reboot, clear_node_requested_deep_sleep,
-    _node_readings_to_package_reading_and_alarm, _build_cache_entry, _recompute_alarm_count, append_to_cache,
+    _node_readings_to_package_reading_and_alarm, _build_cache_entry, append_to_cache,
     db,
 )
 # from notifications import notify_home # NU IN MVP4
@@ -108,6 +107,9 @@ async def handle_package(raw: dict):
         print(f"[SERVER] Invalid package: {e}")
         return
 
+    # override ESP timestamp with server UTC — avoids clock skew on comparisons
+    pkg.timestamp = datetime.now(timezone.utc).isoformat()
+
     home = get_home_by_mac(pkg.master_mac)
     if not home:
         print(f"[SERVER] Unknown MAC {pkg.master_mac}, auto-creating home")
@@ -127,7 +129,7 @@ async def handle_package(raw: dict):
             signal_weak=node.warnings.signal_weak,
         )
 
-    # disaster detection — bypasses cache entirely
+    # disaster detection
     disaster_type = _get_disaster_type(pkg)
     if disaster_type:
         active_eid = home.get("activeEventId")
@@ -141,58 +143,44 @@ async def handle_package(raw: dict):
         touch_home_last_seen(hid)
         return
 
-    # append to cache — flushes internally if full
     analysis = append_to_cache(hid, pkg)
-
     active_eid = home.get("activeEventId")
 
     if not analysis["flushed"]:
-        # mid-cache: only check idle streak for closing an open event
+        # mid-cache: only thing that can happen is idle streak closing an open event
         if analysis["should_close"] and active_eid:
             close_event(hid, active_eid)
         touch_home_last_seen(hid)
         return
 
-    # --- cache flushed: make all decisions here ---
-    entries = analysis["entries"]   # list[CacheEntry], 10 items
+    # cache flushed
+    entries = analysis["entries"]   # list[CacheEntry], exactly MAX_CACHE items
 
     if active_eid:
-        # there is an open event — always push this chunk to it
-        # but first: filter out entries that happened after the event closed
-        # (handles the case where user closed the event mid-cache)
+        # check if user already closed the event while this cache was filling
         event_doc = (
             db.collection("home_events").document(hid)
             .collection("events").document(active_eid)
             .get()
         )
         event_data = event_doc.to_dict() if event_doc.exists else {}
-        ended_at = event_data.get("endedAt")   # None if still open
+        ended_at = event_data.get("endedAt")
 
         if ended_at:
-            # event was closed by user mid-cache: push only packages before endedAt
-            entries_before_close = [
-                e for e in entries
-                if e.timestamp <= ended_at.isoformat()
-            ]
-            if entries_before_close:
-                update_event(hid, active_eid, entries_before_close)
-                print(f"[SERVER] Pushed {len(entries_before_close)} pre-close entries to closed event {active_eid}")
-            # drop the rest — event is closed, we move on
-        else:
-            # event still open: push full chunk
             update_event(hid, active_eid, entries)
-
+            print(f"[SERVER] Final chunk dumped to user-closed event {active_eid}")
+        else:
+            update_event(hid, active_eid, entries)
             if analysis["should_close"]:
                 close_event(hid, active_eid)
                 print(f"[SERVER] Event {active_eid} closed by idle streak")
 
     else:
-        # no active event
+        # no active event 
         if analysis["is_alarm"]:
             new_eid = start_event(hid)
             print(f"[SERVER] Intruder event started: {new_eid}")
             update_event(hid, new_eid, entries)
-        # else: not a threat, cache just cleared, nothing to do
 
     for node in pkg.nodes:
         active_warnings = [
@@ -206,7 +194,6 @@ async def handle_package(raw: dict):
             print(f"[SERVER] Node {node.node_id} warnings: {active_warnings}")
 
     touch_home_last_seen(hid)
-
 
 # config request handler:
 async def handle_config_request(master_mac: str, raw: dict):

@@ -100,6 +100,7 @@ class CacheSensorsDoc(BaseModel):
 
 
 class CacheNodeReadingDoc(BaseModel):
+    node_id: str = Field(alias="nodeId")
     state: str
 
     raw_mq2_reading: int = Field(alias="rawMq2Reading")
