@@ -199,6 +199,7 @@ def _build_cache_entry(pkg: Package, movement_pct: int, is_alarm: bool) -> Cache
         is_alarm=is_alarm,
         nodes=[
             CacheNodeReadingDoc(
+                node_id=node.node_id,
                 state=node.state,
                 movement_pct=node.movement_pct,
                 raw_mq2_reading=node.raw_mq2_reading,
