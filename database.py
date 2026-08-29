@@ -160,28 +160,27 @@ def get_nodes_for_home(hid: str) -> list[dict]:
         return []
 
 
-# cache & threat analysis
+# cache
 #constants:
 MOVEMENT_THRESHOLD = 140
 ALARM_MULTI_COUNT = 2
 THREAT_COUNT = 3
 MAX_CACHE = 10
-IDLE_CLOSE_COUNT = 30 #TODO cum pot ajunge la 30 daca in cahce sunt numai 10??
+IDLE_CLOSE_COUNT = 30 # se ia si dupa flush
 
+# in-memory state
 _event_chunk_counters: dict[str, int] = {}
+_idle_streaks: dict[str, int] = {}
 
-def node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]:
+# helpers
+def _node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]:
     active_nodes = [n for n in pkg.nodes if not n.warnings.not_transmitting]
     if not active_nodes:
         return (0, False)
 
     readings = sorted((n.movement_pct for n in active_nodes), reverse=True)
 
-    if len(readings) == 1:
-        package_movement_pct = readings[0]
-    else:
-        package_movement_pct = (readings[0] + readings[1]) // 2
-
+    package_movement_pct = readings[0] if len(readings) == 1 else (readings[0] + readings[1]) // 2
     package_movement_pct = min(200, max(0, package_movement_pct))
     over_threshold = sum(1 for r in readings if r >= MOVEMENT_THRESHOLD)
 
@@ -189,10 +188,11 @@ def node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]
         package_movement_pct >= MOVEMENT_THRESHOLD
         or over_threshold >= ALARM_MULTI_COUNT
     )
-
     return (package_movement_pct, is_alarm)
 
+
 def _build_cache_entry(pkg: Package, movement_pct: int, is_alarm: bool) -> CacheEntry:
+    # pkg.timestamp is already overwritten with server UTC before this is called
     return CacheEntry(
         timestamp=pkg.timestamp,
         warning_type=pkg.warning_type,
@@ -214,65 +214,66 @@ def _build_cache_entry(pkg: Package, movement_pct: int, is_alarm: bool) -> Cache
         ]
     )
 
-def _recompute_counters(entries: list[CacheEntry]) -> tuple[int, int]: # (alarm_count, idle_streak)
-    alarm_count = sum(1 for e in entries if e.is_alarm)
-    idle_streak = 0
-    for e in reversed(entries):
-        if not e.is_alarm and e.warning_type is None:
-            idle_streak += 1
-        else:
-            break
-    return alarm_count, idle_streak
+def _recompute_alarm_count(entries: list[CacheEntry]) -> int:
+    return sum(1 for e in entries if e.is_alarm)
 
-def analyse_and_flush_cache(hid: str, entries: list[CacheEntry]) -> dict:
-    alarm_count, idle_streak = _recompute_counters(entries)
-    is_alarm = alarm_count >= THREAT_COUNT
+def _update_idle_streak(hid: str, new_entry: CacheEntry) -> int:
+    if new_entry.is_alarm or new_entry.warning_type is not None:
+        _idle_streaks[hid] = 0
+    else:
+        _idle_streaks[hid] = _idle_streaks.get(hid, 0) + 1
+    return _idle_streaks[hid]
+
+
+# cache
+def _analyse_and_flush_cache(hid: str, entries: list[CacheEntry], idle_streak: int, cache_ref,) -> dict:
+    alarm_count = _recompute_alarm_count(entries)
+    is_alarm    = alarm_count >= THREAT_COUNT
     should_close = idle_streak >= IDLE_CLOSE_COUNT
 
-    db.collection("cache").document(hid).set({
-        "packages": [],
-        "alarmCount": 0,
-        "idleStreak": 0,
-        "isAlarm": False,
+    # reset Firestore cache
+    cache_ref.set({
+        "packages":    [],
+        "alarmCount":  0,
+        "idleStreak":  idle_streak,   # keep the running streak visible to app
+        "isAlarm":     False,
         "nodeReadings": {},
-        "updatedAt": datetime.now(timezone.utc),
+        "updatedAt":   datetime.now(timezone.utc),
     })
 
     return {
-        "flushed": True,
-        "entries": entries,          # the 10 tagged CacheEntry objects
-        "alarm_count": alarm_count,
-        "idle_streak": idle_streak,
-        "is_alarm": is_alarm,
+        "flushed":      True,
+        "entries":      entries,
+        "alarm_count":  alarm_count,
+        "idle_streak":  idle_streak,
+        "is_alarm":     is_alarm,
         "should_close": should_close,
         "latest_entry": entries[-1],
     }
 
 def append_to_cache(hid: str, pkg: Package) -> dict:
     """
-    Tags the incoming package, appends it to Firestore cache, 
-    recomputes counters. Returns current cache state.
-    If the cache hits MAX_CACHE, triggers analyse_and_flush_cache instead.
+    Tags the incoming package, appends it to the Firestore cache doc
+    (so the app always has a live view). Flushes and analyses when full.
+    Returns a dict describing current state for handle_package to act on.
     """
-    movement_pct, is_alarm = node_readings_to_package_reading_and_alarm(pkg)
+    movement_pct, is_alarm = _node_readings_to_package_reading_and_alarm(pkg)
     new_entry = _build_cache_entry(pkg, movement_pct, is_alarm)
 
-    cache_ref = db.collection("cache").document(hid)
-    cache_doc = cache_ref.get()
-    cache_data = cache_doc.to_dict() if cache_doc.exists else {}
+    idle_streak = _update_idle_streak(hid, new_entry)
 
+    cache_ref = db.collection("cache").document(hid)
+    cache_data = (cache_ref.get().to_dict()) or {}
     raw_entries = cache_data.get("packages", [])
     entries: list[CacheEntry] = [CacheEntry(**e) for e in raw_entries]
     entries.append(new_entry)
 
     if len(entries) >= MAX_CACHE:
-        # hand off to flush, it will write to Firestore itself
-        return analyse_and_flush_cache(hid, entries)
+        return _analyse_and_flush_cache(hid, entries, idle_streak, cache_ref)
 
-    alarm_count, idle_streak = _recompute_counters(entries)
+    alarm_count = _recompute_alarm_count(entries)
 
-    now = datetime.now(timezone.utc)
-    latest_pkg_nodes = {
+    node_readings = {
         node.node_id: CacheNodeReadingDoc(
             state=node.state,
             movement_pct=node.movement_pct,
@@ -288,104 +289,54 @@ def append_to_cache(hid: str, pkg: Package) -> dict:
     }
 
     cache_ref.set({
-        "packages": [e.model_dump(by_alias=True) for e in entries],
-        "alarmCount": alarm_count,
-        "idleStreak": idle_streak,
-        "isAlarm": alarm_count >= THREAT_COUNT,
-        "nodeReadings": {k: v.model_dump(by_alias=True) for k, v in latest_pkg_nodes.items()},
-        "updatedAt": now,
+        "packages":    [e.model_dump(by_alias=True) for e in entries],
+        "alarmCount":  alarm_count,
+        "idleStreak":  idle_streak,
+        "isAlarm":     alarm_count >= THREAT_COUNT,
+        "nodeReadings": {k: v.model_dump(by_alias=True) for k, v in node_readings.items()},
+        "updatedAt":   datetime.now(timezone.utc),
     })
 
     return {
-        "flushed": False,
-        "entries": entries,
-        "alarm_count": alarm_count,
-        "idle_streak": idle_streak,
-        "is_alarm": alarm_count >= THREAT_COUNT,
+        "flushed":      False,
+        "entries":      entries,
+        "alarm_count":  alarm_count,
+        "idle_streak":  idle_streak,
+        "is_alarm":     alarm_count >= THREAT_COUNT,
         "should_close": idle_streak >= IDLE_CLOSE_COUNT,
         "latest_entry": new_entry,
     }
 
-def write_cache(hid: str, entry: CacheEntry, analysis: dict):
-    cache = CacheDoc(
-        alarm_count=analysis["alarm_count"],
-        is_alarm=analysis["is_alarm"],
-        window_size=analysis["cache_size"],
-        node_readings={
-            node.node_id: CacheNodeReadingDoc(
-                state=node.state,
-                movement_pct=node.movement_pct,
-                raw_mq2_reading=node.raw_mq2_reading,
-                is_alarm=node.movement_pct >= MOVEMENT_THRESHOLD,
-                sensors=CacheSensorsDoc(
-                    flame=node.sensors.flame,
-                    gas=node.sensors.gas,
-                    battery_pct=node.sensors.battery_pct,
-                )
-            )
-            for node in entry.package.nodes
-        },
-        updated_at=datetime.now(timezone.utc),
-    )
-    db.collection("cache").document(hid).set(cache.model_dump(by_alias=True))
 
-
-def analyse_cache(hid: str, package: Package) -> dict: # TODO RESCRIS PE NOUA STRUCTURA
-    window = _package_windows.setdefault(hid, [])
-    window.append(package)
-
-    flushed = False
-    flushed_chunk = None
-
-    if len(window) > MAX_CACHE:
-        flushed = True
-        flushed_chunk = list(window)
-        window.clear()
-
-    current_window = flushed_chunk if flushed else window
-    alarm_count = 0
-    for p in current_window:
-        m_pct, is_a = node_readings_to_package_reading_and_alarm(p)
-        if is_a:
-            alarm_count += 1
-
-    is_alarm = alarm_count >= THREAT_COUNT
-
-    idle_streak = 0
-    for p in reversed(window):
-        _, is_alarm = node_readings_to_package_reading_and_alarm(p) # TODO IN LOC SA RECALCULAM LA FIECARE ITERATIE SA CONTINA P O VARIABILA IS_ARMED PE CARE O SETAM SI REFOLOSIM
-        if not is_alarm and p.warning_type is None:
-            idle_streak 
-        else:
-            break
-
-    return {
-        "is_alarm": alarm_count >= 3,    
-        "alarm_count": alarm_count,
-        "should_close_session": idle_streak >= IDLE_CLOSE_COUNT,
-        "window_size": len(window),
-        "current_window": window,
-
-        "flushed": flushed,
-        "flushed_chunk": flushed_chunk
-    }
-
+# home helpers
+def set_active_event(hid: str, event_id: Optional[str]):
+    db.collection("homes").document(hid).update({
+        "activeEventId": event_id,
+    })
 
 # events
 def start_event(hid: str) -> str:
     eid = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
 
-    event = EventDoc(hid=hid, started_at=now, ended_at=None, dismissed_by_user=False, false_alarm=None)
-
+    event = EventDoc(
+        hid=hid,
+        started_at=now,
+        ended_at=None,
+        dismissed_by_user=False,
+        false_alarm=None,
+    )
     (
         db.collection("home_events").document(hid)
         .collection("events").document(eid)
         .set(event.model_dump(by_alias=True))
     )
     set_active_event(hid, eid)
+    _idle_streaks[hid] = 0 
+    print(f"[DB] Event started: {eid}")
 
     return eid
+
 
 def update_event(hid: str, eid: str, entries: list[CacheEntry]): 
     if not entries:
@@ -395,29 +346,24 @@ def update_event(hid: str, eid: str, entries: list[CacheEntry]):
         "savedAt": datetime.now(timezone.utc).isoformat(),
         "packages": [
             {
-                "timestamp": e.package.timestamp,
-                "warning_type": e.package.warning_type,
+                "timestamp":          e.timestamp,
+                "warning_type":       e.warning_type,
                 "package_movement_pct": e.package_movement_pct,
-                "is_alarm": e.is_alarm,
+                "is_alarm":           e.is_alarm,
                 "nodes": [
                     {
-                        "node_id": n.node_id,
-                        "state": n.state,
-                        "movement_pct": n.movement_pct,
+                        "node_id":         n.node_id if hasattr(n, "node_id") else None,
+                        "state":           n.state,
+                        "movement_pct":    n.movement_pct,
                         "raw_mq2_reading": n.raw_mq2_reading,
-                        "is_alarm": n.movement_pct >= MOVEMENT_THRESHOLD,
-                        "warnings": {
-                            "low_battery": n.warnings.low_battery,
-                            "not_transmitting": n.warnings.not_transmitting,
-                            "signal_weak": n.warnings.signal_weak,
-                        },
+                        "is_alarm":        n.is_alarm,
                         "sensors": {
-                            "flame": n.sensors.flame,
-                            "gas": n.sensors.gas,
+                            "flame":       n.sensors.flame,
+                            "gas":         n.sensors.gas,
                             "battery_pct": n.sensors.battery_pct,
                         },
                     }
-                    for n in e.package.nodes
+                    for n in e.nodes
                 ],
             }
             for e in entries
@@ -447,7 +393,9 @@ def close_event(hid: str, eid: str):
         .update({"endedAt": datetime.now(timezone.utc)})
     )
     set_active_event(hid, None)
-    _event_chunk_counters.pop(eid, None)   
+    
+    _event_chunk_counters.pop(eid, None)
+    _idle_streaks[hid] = 0
 
     print(f"[DB] Event closed: {eid}")
 

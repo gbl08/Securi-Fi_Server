@@ -17,8 +17,7 @@ from database import (
     set_node_armed, set_node_requested_armed,
     start_event, update_event, close_event,
     revert_node_requested_armed, clear_node_requested_reboot, clear_node_requested_deep_sleep,
-    node_readings_to_package_reading_and_alarm,
-    _build_cache_entry,
+    _node_readings_to_package_reading_and_alarm, _build_cache_entry, _recompute_alarm_count, append_to_cache,
     db,
 )
 # from notifications import notify_home # NU IN MVP4
@@ -136,7 +135,7 @@ async def handle_package(raw: dict):
             active_eid = start_event(hid)
             print(f"[SERVER] Disaster event started ({disaster_type}): {active_eid}")
 
-        movement_pct, _ = node_readings_to_package_reading_and_alarm(pkg)
+        movement_pct, _ = _node_readings_to_package_reading_and_alarm(pkg)
         disaster_entry = _build_cache_entry(pkg, movement_pct, True)
         update_event(hid, active_eid, [disaster_entry])
         touch_home_last_seen(hid)
