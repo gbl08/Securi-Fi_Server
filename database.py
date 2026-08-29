@@ -21,9 +21,6 @@ cred = credentials.Certificate("serviceAccountKey.json")
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-MAX_CACHE = 10          # how many recent packages to keep per home's sliding window
-IDLE_CLOSE_COUNT = 30   # consecutive idle packages needed to auto-close an open session
-
 print("[DB] Firebase connected :D")
 
 
@@ -168,8 +165,12 @@ def get_nodes_for_home(hid: str) -> list[dict]:
 MOVEMENT_THRESHOLD = 140
 ALARM_MULTI_COUNT = 2
 THREAT_COUNT = 3
+MAX_CACHE = 10
+IDLE_CLOSE_COUNT = 30 #TODO cum pot ajunge la 30 daca in cahce sunt numai 10??
 
-def node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]: # TODO testat, fine tune
+_event_chunk_counters: dict[str, int] = {}
+
+def node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]:
     active_nodes = [n for n in pkg.nodes if not n.warnings.not_transmitting]
     if not active_nodes:
         return (0, False)
@@ -182,7 +183,6 @@ def node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]
         package_movement_pct = (readings[0] + readings[1]) // 2
 
     package_movement_pct = min(200, max(0, package_movement_pct))
-
     over_threshold = sum(1 for r in readings if r >= MOVEMENT_THRESHOLD)
 
     is_alarm = (
@@ -192,46 +192,118 @@ def node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]
 
     return (package_movement_pct, is_alarm)
 
+def _build_cache_entry(pkg: Package, movement_pct: int, is_alarm: bool) -> CacheEntry:
+    return CacheEntry(
+        timestamp=pkg.timestamp,
+        warning_type=pkg.warning_type,
+        package_movement_pct=movement_pct,
+        is_alarm=is_alarm,
+        nodes=[
+            CacheNodeReadingDoc(
+                state=node.state,
+                movement_pct=node.movement_pct,
+                raw_mq2_reading=node.raw_mq2_reading,
+                is_alarm=node.movement_pct >= MOVEMENT_THRESHOLD,
+                sensors=CacheSensorsDoc(
+                    flame=node.sensors.flame,
+                    gas=node.sensors.gas,
+                    battery_pct=node.sensors.battery_pct,
+                )
+            )
+            for node in pkg.nodes
+        ]
+    )
 
-_cache: dict[str, list[CacheEntry]] = {} # TODO DE TRECUT DE LA IN-MEMORY LA IN-DATABASE CA SA POATA FI ACCESAT INSTANT DE PE APP
-_event_chunk_counters: dict[str, int] = {}
-
-def append_to_cache(hid: str, package: Package) -> dict:
-    entries = _cache.setdefault(hid, [])
-
-    movement_pct, is_alarm = node_readings_to_package_reading_and_alarm(package)
-    entry = CacheEntry(package=package, package_movement_pct=movement_pct, is_alarm=is_alarm)
-    entries.append(entry)
-
-    # TODO ASTEA NU SE POT VERIFICA CAND CACHE-UL E PLIN??
+def _recompute_counters(entries: list[CacheEntry]) -> tuple[int, int]: # (alarm_count, idle_streak)
     alarm_count = sum(1 for e in entries if e.is_alarm)
     idle_streak = 0
     for e in reversed(entries):
-        if not e.is_alarm and e.package.warning_type is None:
+        if not e.is_alarm and e.warning_type is None:
             idle_streak += 1
         else:
             break
+    return alarm_count, idle_streak
 
+def analyse_and_flush_cache(hid: str, entries: list[CacheEntry]) -> dict:
+    alarm_count, idle_streak = _recompute_counters(entries)
     is_alarm = alarm_count >= THREAT_COUNT
     should_close = idle_streak >= IDLE_CLOSE_COUNT
 
-    flushed = False
-    flushed_entries: list[CacheEntry] = []
-
-    if len(entries) >= MAX_CACHE:
-        flushed = True
-        flushed_entries = list(entries)
-        _cache[hid] = []
+    db.collection("cache").document(hid).set({
+        "packages": [],
+        "alarmCount": 0,
+        "idleStreak": 0,
+        "isAlarm": False,
+        "nodeReadings": {},
+        "updatedAt": datetime.now(timezone.utc),
+    })
 
     return {
-        "latest_entry": entry,
+        "flushed": True,
+        "entries": entries,          # the 10 tagged CacheEntry objects
         "alarm_count": alarm_count,
         "idle_streak": idle_streak,
         "is_alarm": is_alarm,
         "should_close": should_close,
-        "cache_size": len(entries), 
-        "flushed": flushed,
-        "flushed_entries": flushed_entries,
+        "latest_entry": entries[-1],
+    }
+
+def append_to_cache(hid: str, pkg: Package) -> dict:
+    """
+    Tags the incoming package, appends it to Firestore cache, 
+    recomputes counters. Returns current cache state.
+    If the cache hits MAX_CACHE, triggers analyse_and_flush_cache instead.
+    """
+    movement_pct, is_alarm = node_readings_to_package_reading_and_alarm(pkg)
+    new_entry = _build_cache_entry(pkg, movement_pct, is_alarm)
+
+    cache_ref = db.collection("cache").document(hid)
+    cache_doc = cache_ref.get()
+    cache_data = cache_doc.to_dict() if cache_doc.exists else {}
+
+    raw_entries = cache_data.get("packages", [])
+    entries: list[CacheEntry] = [CacheEntry(**e) for e in raw_entries]
+    entries.append(new_entry)
+
+    if len(entries) >= MAX_CACHE:
+        # hand off to flush, it will write to Firestore itself
+        return analyse_and_flush_cache(hid, entries)
+
+    alarm_count, idle_streak = _recompute_counters(entries)
+
+    now = datetime.now(timezone.utc)
+    latest_pkg_nodes = {
+        node.node_id: CacheNodeReadingDoc(
+            state=node.state,
+            movement_pct=node.movement_pct,
+            raw_mq2_reading=node.raw_mq2_reading,
+            is_alarm=node.movement_pct >= MOVEMENT_THRESHOLD,
+            sensors=CacheSensorsDoc(
+                flame=node.sensors.flame,
+                gas=node.sensors.gas,
+                battery_pct=node.sensors.battery_pct,
+            )
+        )
+        for node in pkg.nodes
+    }
+
+    cache_ref.set({
+        "packages": [e.model_dump(by_alias=True) for e in entries],
+        "alarmCount": alarm_count,
+        "idleStreak": idle_streak,
+        "isAlarm": alarm_count >= THREAT_COUNT,
+        "nodeReadings": {k: v.model_dump(by_alias=True) for k, v in latest_pkg_nodes.items()},
+        "updatedAt": now,
+    })
+
+    return {
+        "flushed": False,
+        "entries": entries,
+        "alarm_count": alarm_count,
+        "idle_streak": idle_streak,
+        "is_alarm": alarm_count >= THREAT_COUNT,
+        "should_close": idle_streak >= IDLE_CLOSE_COUNT,
+        "latest_entry": new_entry,
     }
 
 def write_cache(hid: str, entry: CacheEntry, analysis: dict):
@@ -394,3 +466,8 @@ def clear_node_requested_reboot(hid: str, node_id: str):
 
 def clear_node_requested_deep_sleep(hid: str, node_id: str):
     db.collection("nodes").document(f"{hid}_{node_id}").update({"requestedDeepSleep": False})
+
+def set_active_event(hid: str, event_id: Optional[str]):
+    db.collection("homes").document(hid).update({
+        "activeEventId": event_id,
+    })

@@ -59,7 +59,7 @@ class NodeConfigConfirmation(BaseModel):
 # docs: 
 class HomeDoc(BaseModel):
     master_mac: str = Field(alias="masterMac")
-    
+
     active_event_id: Optional[str] = Field(default=None, alias="activeEventId")
 
     last_seen: datetime = Field(alias="lastSeen")
@@ -112,13 +112,14 @@ class CacheNodeReadingDoc(BaseModel):
 
 
 class CacheDoc(BaseModel):
-    alarm_count: int = Field(alias="alarmCount")# asta folosesti drept "probability"
-    idle_Streak: int = Field(alias="idleStreak")
-    is_alarm: bool = Field(alias="isAlarm") # daca cache-ul in sine ar trebui sa inceapa un nou event sau nu
+    packages: List[CacheEntry] = Field(default_factory=list)
 
-    packages: list[Package]
+    alarm_count: int = Field(default=0, alias="alarmCount")
+    idle_streak: int = Field(default=0, alias="idleStreak")
+    is_alarm: bool = Field(default=False, alias="isAlarm")   # true if this cache would trigger a threat
 
-    # node_readings: dict[str, CacheNodeReadingDoc] = Field(alias="nodeReadings")
+    node_readings: dict[str, "CacheNodeReadingDoc"] = Field(alias="nodeReadings")
+
     updated_at: datetime = Field(alias="updatedAt")
 
     model_config = ConfigDict(populate_by_name=True)
@@ -137,9 +138,13 @@ class EventDoc(BaseModel):
 
 
 # cache
-@dataclass
-class CacheEntry:
-    package: Package
+class CacheEntry(BaseModel):
+    timestamp: str
 
-    package_movement_pct: int
-    is_alarm: bool
+    warning_type: Optional[str] = None
+    is_alarm: bool = Field(alias="isAlarm")
+    package_movement_pct: int = Field(alias="packageMovementPct")
+    
+    nodes: List[CacheNodeReadingDoc] # TODO CacheNodeReadingDoc sau "CacheNodeReadingDoc"?
+
+    model_config = ConfigDict(populate_by_name=True)

@@ -18,6 +18,7 @@ from database import (
     start_event, update_event, close_event,
     revert_node_requested_armed, clear_node_requested_reboot, clear_node_requested_deep_sleep,
     node_readings_to_package_reading_and_alarm,
+    _build_cache_entry,
     db,
 )
 # from notifications import notify_home # NU IN MVP4
@@ -102,96 +103,109 @@ def start_firestore_listener():
 
 # telemetry handler;
 async def handle_package(raw: dict):
-    # validate:
     try:
         pkg = Package(**raw)
     except Exception as e:
         print(f"[SERVER] Invalid package: {e}")
-        return 
+        return
 
-    # resolve / auto-create home:
     home = get_home_by_mac(pkg.master_mac)
     if not home:
         print(f"[SERVER] Unknown MAC {pkg.master_mac}, auto-creating home")
-
         hid = create_home(pkg.master_mac)
         home = get_home(hid)
         home["hid"] = hid
 
     hid = home["hid"]
 
-    # upsert nodes + update warnings:
     for node in pkg.nodes:
         upsert_node(hid, node.node_id, node.role)
         update_node_warnings(
             hid=hid,
             node_id=node.node_id,
-
             low_battery=node.warnings.low_battery,
             not_transmitting=node.warnings.not_transmitting,
-            signal_weak=node.warnings.signal_weak
+            signal_weak=node.warnings.signal_weak,
         )
 
-    # disaster detection 
+    # disaster detection — bypasses cache entirely
     disaster_type = _get_disaster_type(pkg)
     if disaster_type:
         active_eid = home.get("activeEventId")
         if not active_eid:
             active_eid = start_event(hid)
             print(f"[SERVER] Disaster event started ({disaster_type}): {active_eid}")
-            # await notify_home(hid, disaster_type, 1.0) # nu in MVP4
 
-        from models import CacheEntry
-        disaster_entry = CacheEntry(
-            package=pkg,
-            package_movement_pct=0,
-            is_alarm=False
-        ) 
+        movement_pct, _ = node_readings_to_package_reading_and_alarm(pkg)
+        disaster_entry = _build_cache_entry(pkg, movement_pct, True)
         update_event(hid, active_eid, [disaster_entry])
         touch_home_last_seen(hid)
         return
 
-    # cache analysis
-    analysis = analyse_cache(hid, pkg)
-    entry = analysis["latest_entry"]
+    # append to cache — flushes internally if full
+    analysis = append_to_cache(hid, pkg)
 
-    write_cache(hid, entry, analysis)
-
-    # intruder event lifecycle
     active_eid = home.get("activeEventId")
 
-    if analysis["flushed"]:
-        flushed = analysis["flushed_entries"]
+    if not analysis["flushed"]:
+        # mid-cache: only check idle streak for closing an open event
+        if analysis["should_close"] and active_eid:
+            close_event(hid, active_eid)
+        touch_home_last_seen(hid)
+        return
 
-        if analysis["is_alarm"]:
-            if not active_eid:
-                active_eid = start_event(hid)
-                print(f"[SERVER] Intruder event started: {active_eid}")
-            update_event(hid, active_eid, flushed)
+    # --- cache flushed: make all decisions here ---
+    entries = analysis["entries"]   # list[CacheEntry], 10 items
 
-        elif active_eid: # TODO VERIFICAT LOGICA LA UPDATING EVENT
-            update_event(hid, active_eid, flushed)
+    if active_eid:
+        # there is an open event — always push this chunk to it
+        # but first: filter out entries that happened after the event closed
+        # (handles the case where user closed the event mid-cache)
+        event_doc = (
+            db.collection("home_events").document(hid)
+            .collection("events").document(active_eid)
+            .get()
+        )
+        event_data = event_doc.to_dict() if event_doc.exists else {}
+        ended_at = event_data.get("endedAt")   # None if still open
+
+        if ended_at:
+            # event was closed by user mid-cache: push only packages before endedAt
+            entries_before_close = [
+                e for e in entries
+                if e.timestamp <= ended_at.isoformat()
+            ]
+            if entries_before_close:
+                update_event(hid, active_eid, entries_before_close)
+                print(f"[SERVER] Pushed {len(entries_before_close)} pre-close entries to closed event {active_eid}")
+            # drop the rest — event is closed, we move on
+        else:
+            # event still open: push full chunk
+            update_event(hid, active_eid, entries)
+
             if analysis["should_close"]:
                 close_event(hid, active_eid)
-                active_eid = None
+                print(f"[SERVER] Event {active_eid} closed by idle streak")
 
-    elif analysis["should_close"] and active_eid:
-        close_event(hid, active_eid)
+    else:
+        # no active event
+        if analysis["is_alarm"]:
+            new_eid = start_event(hid)
+            print(f"[SERVER] Intruder event started: {new_eid}")
+            update_event(hid, new_eid, entries)
+        # else: not a threat, cache just cleared, nothing to do
 
-
-    # log node warning:
     for node in pkg.nodes:
-        active = [
+        active_warnings = [
             w for w, v in [
                 ("low_battery", node.warnings.low_battery),
                 ("not_transmitting", node.warnings.not_transmitting),
                 ("signal_weak", node.warnings.signal_weak),
             ] if v
         ]
-        if active:
-            print(f"[SERVER] Node {node.node_id} warnings: {active}")
+        if active_warnings:
+            print(f"[SERVER] Node {node.node_id} warnings: {active_warnings}")
 
-    # touching last seen: 
     touch_home_last_seen(hid)
 
 
