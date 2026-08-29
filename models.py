@@ -29,7 +29,7 @@ class NodeReading(BaseModel):
 
 class Package(BaseModel):
     master_mac: str
-    timestamp: str
+    timestamp: str # overwritten on the server bc claude said so
 
     warning_type: Optional[str] = None
     nodes: List[NodeReading]
@@ -79,7 +79,6 @@ class NodeWarningDoc(BaseModel):
 class NodeDoc(BaseModel):
     hid: str
     node_id: str = Field(alias="nodeId")
-
     nickname: str
     role: str  # "master" | "slave"
 
@@ -91,6 +90,7 @@ class NodeDoc(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+# cache
 class CacheSensorsDoc(BaseModel):
     flame: bool
     gas: bool
@@ -104,21 +104,31 @@ class CacheNodeReadingDoc(BaseModel):
 
     raw_mq2_reading: int = Field(alias="rawMq2Reading")
     movement_pct: int = Field(alias="movementPct")
-    is_alarm: bool = Field(alias="isAlarm") # inca nush daca asta ramane sau nu
+    is_alarm: bool = Field(alias="isAlarm")
 
     sensors: CacheSensorsDoc
 
     model_config = ConfigDict(populate_by_name=True)
 
+class CacheEntry(BaseModel):
+    timestamp: str
+
+    warning_type: Optional[str] = None
+    is_alarm: bool = Field(alias="isAlarm")
+    package_movement_pct: int = Field(alias="packageMovementPct")
+    
+    nodes: List[CacheNodeReadingDoc] 
+
+    model_config = ConfigDict(populate_by_name=True)
 
 class CacheDoc(BaseModel):
     packages: List[CacheEntry] = Field(default_factory=list)
 
     alarm_count: int = Field(default=0, alias="alarmCount")
     idle_streak: int = Field(default=0, alias="idleStreak")
-    is_alarm: bool = Field(default=False, alias="isAlarm")   # true if this cache would trigger a threat
+    is_alarm: bool = Field(default=False, alias="isAlarm")   # true daca cache-ul ar trebui sa dea trigger la un event
 
-    node_readings: dict[str, "CacheNodeReadingDoc"] = Field(alias="nodeReadings")
+    node_readings: dict[str, CacheNodeReadingDoc] = Field(alias="nodeReadings")
 
     updated_at: datetime = Field(alias="updatedAt")
 
@@ -133,18 +143,5 @@ class EventDoc(BaseModel):
     
     dismissed_by_user: bool = Field(default=False, alias="dismissedByUser")
     false_alarm: Optional[str] = Field(default=None, alias="falseAlarm")
-
-    model_config = ConfigDict(populate_by_name=True)
-
-
-# cache
-class CacheEntry(BaseModel):
-    timestamp: str
-
-    warning_type: Optional[str] = None
-    is_alarm: bool = Field(alias="isAlarm")
-    package_movement_pct: int = Field(alias="packageMovementPct")
-    
-    nodes: List[CacheNodeReadingDoc] # TODO CacheNodeReadingDoc sau "CacheNodeReadingDoc"?
 
     model_config = ConfigDict(populate_by_name=True)
