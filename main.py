@@ -17,6 +17,7 @@ from database import (
     start_event, update_event, close_event,
     revert_node_requested_armed, clear_node_requested_reboot, clear_node_requested_deep_sleep,
     _node_readings_to_package_reading_and_alarm, _build_cache_entry, append_to_cache,
+    send_command_with_timeout, resolve_pending_command,
     db,
 )
 # from notifications import notify_home # NU IN MVP4
@@ -79,17 +80,17 @@ def on_nodes_snapshot(col_snapshot, changes, read_time):
         if requested_armed != current_armed:
             cmd = "arm" if requested_armed else "disarm"
             print(f"[SNAPSHOT] Node {node_id} {cmd} mismatch, sending command")
-            send_config_command(master_mac, node_id, cmd)
+            send_command_with_timeout(master_mac, node_id, cmd)
 
         # reboot request
         if data.get("requestedReboot", False):
             print(f"[SNAPSHOT] Node {node_id} reboot requested")
-            send_config_command(master_mac, node_id, "reboot")
+            send_command_with_timeout(master_mac, node_id, "reboot")
 
         # deep sleep request
         if data.get("requestedDeepSleep", False):
             print(f"[SNAPSHOT] Node {node_id} deep sleep requested")
-            send_config_command(master_mac, node_id, "deep_sleep")
+            send_command_with_timeout(master_mac, node_id, "deep_sleep")
 
 def start_firestore_listener():
     db.collection("nodes").on_snapshot(on_nodes_snapshot)
@@ -238,26 +239,26 @@ async def handle_config_confirmation(master_mac: str, raw: dict):
     match conf.cmd:
         case "arm":
             if conf.success:
+                resolve_pending_command(hid, conf.node_id, "arm")
                 set_node_armed(hid, conf.node_id, True)
-                print(f"[SERVER] Node {conf.node_id} armed confirmed")
             else:
                 revert_node_requested_armed(hid, conf.node_id)
-                print(f"[SERVER] Node {conf.node_id} arm FAILED — requestedArmed reverted")
 
         case "disarm":
             if conf.success:
+                resolve_pending_command(hid, conf.node_id, "disarm")
                 set_node_armed(hid, conf.node_id, False)
-                print(f"[SERVER] Node {conf.node_id} disarmed confirmed")
             else:
                 revert_node_requested_armed(hid, conf.node_id)
-                print(f"[SERVER] Node {conf.node_id} disarm FAILED — requestedArmed reverted")
 
         case "reboot":
+            resolve_pending_command(hid, conf.node_id, "reboot")
             clear_node_requested_reboot(hid, conf.node_id)
             if not conf.success:
                 print(f"[SERVER] Node {conf.node_id} reboot FAILED")
 
         case "deep_sleep":
+            resolve_pending_command(hid, conf.node_id, "deep_sleep")
             clear_node_requested_deep_sleep(hid, conf.node_id)
             if not conf.success:
                 print(f"[SERVER] Node {conf.node_id} deep sleep FAILED")

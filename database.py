@@ -3,6 +3,7 @@ from firebase_admin import credentials, firestore
 from datetime import datetime, timezone
 from typing import Optional
 import uuid
+import threading
 
 from models import (
     Package,
@@ -419,3 +420,45 @@ def set_active_event(hid: str, event_id: Optional[str]):
     db.collection("homes").document(hid).update({
         "activeEventId": event_id,
     })
+
+
+# in-memory pending command tokens
+COMMAND_TIMEOUT_SECONDS = 15
+_pending_commands: dict[tuple, threading.Timer] = {}
+
+
+def _on_command_timeout(hid: str, node_id: str, cmd: str):
+    key = (hid, node_id, cmd)
+    if key not in _pending_commands:
+        return  # already resolved by a confirmation
+
+    _pending_commands.pop(key, None)
+    print(f"[DB] Command '{cmd}' to node {node_id} timed out — reverting")
+
+    match cmd:
+        case "arm" | "disarm":
+            revert_node_requested_armed(hid, node_id)
+        case "reboot":
+            clear_node_requested_reboot(hid, node_id)
+        case "deep_sleep":
+            clear_node_requested_deep_sleep(hid, node_id)
+
+
+def send_command_with_timeout(hid: str, master_mac: str, node_id: str, cmd: str):
+    from main import send_config_command
+    send_config_command(master_mac, node_id, cmd)
+
+    key = (hid, node_id, cmd)
+    existing = _pending_commands.get(key)
+    if existing:
+        existing.cancel()
+
+    timer = threading.Timer(COMMAND_TIMEOUT_SECONDS, _on_command_timeout, args=(hid, node_id, cmd))
+    _pending_commands[key] = timer
+    timer.start()
+
+
+def resolve_pending_command(hid: str, node_id: str, cmd: str):
+    timer = _pending_commands.pop((hid, node_id, cmd), None)
+    if timer:
+        timer.cancel()
