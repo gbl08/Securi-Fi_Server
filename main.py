@@ -80,17 +80,17 @@ def on_nodes_snapshot(col_snapshot, changes, read_time):
         if requested_armed != current_armed:
             cmd = "arm" if requested_armed else "disarm"
             print(f"[SNAPSHOT] Node {node_id} {cmd} mismatch, sending command")
-            send_command_with_timeout(master_mac, node_id, cmd)
+            send_command_with_timeout(hid, master_mac, node_id, cmd)
 
         # reboot request
         if data.get("requestedReboot", False):
             print(f"[SNAPSHOT] Node {node_id} reboot requested")
-            send_command_with_timeout(master_mac, node_id, "reboot")
+            send_command_with_timeout(hid, master_mac, node_id, "reboot")
 
         # deep sleep request
         if data.get("requestedDeepSleep", False):
             print(f"[SNAPSHOT] Node {node_id} deep sleep requested")
-            send_command_with_timeout(master_mac, node_id, "deep_sleep")
+            send_command_with_timeout(hid, master_mac, node_id, "deep_sleep")
 
 def start_firestore_listener():
     db.collection("nodes").on_snapshot(on_nodes_snapshot)
