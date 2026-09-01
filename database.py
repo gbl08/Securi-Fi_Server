@@ -171,6 +171,7 @@ IDLE_CLOSE_COUNT = 30 # se ia si dupa flush
 # in-memory state
 _event_chunk_counters: dict[str, int] = {}
 _idle_streaks: dict[str, int] = {}
+_buzzer_active: dict[str, bool] = {}
 
 # helpers
 def _node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]:
@@ -316,12 +317,13 @@ def set_active_event(hid: str, event_id: Optional[str]):
     })
 
 # events
-def start_event(hid: str) -> str:
+def start_event(hid: str, event_type: str) -> str:
     eid = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
 
     event = EventDoc(
         hid=hid,
+        event_type=event_type,
         started_at=now,
         ended_at=None,
         dismissed_by_user=False,
@@ -333,8 +335,9 @@ def start_event(hid: str) -> str:
         .set(event.model_dump(by_alias=True))
     )
     set_active_event(hid, eid)
-    _idle_streaks[hid] = 0 
-    print(f"[DB] Event started: {eid}")
+    _idle_streaks[hid] = 0
+
+    print(f"[DB] Event started ({event_type}): {eid}")
 
     return eid
 
@@ -387,19 +390,73 @@ def update_event(hid: str, eid: str, entries: list[CacheEntry]):
     print(f"[DB] Event {eid}: chunks saved ({len(entries)} packages)")
 
 
-def close_event(hid: str, eid: str):
+def close_event(hid: str, eid: str, send_buzzer_off: bool = True):
     (
         db.collection("home_events").document(hid)
         .collection("events").document(eid)
         .update({"endedAt": datetime.now(timezone.utc)})
     )
     set_active_event(hid, None)
-
     _event_chunk_counters.pop(eid, None)
     _idle_streaks[hid] = 0
+    _buzzer_active[hid] = False
+
+    if send_buzzer_off:
+        send_buzzer_to_home(hid, "buzzer_off")
 
     print(f"[DB] Event closed: {eid}")
 
+def send_buzzer_to_home(hid: str, cmd: str):
+    """
+    Sends a buzzer command to all nodes of a home.
+    cmd: "buzzer_on_alarm" | "buzzer_on_warning" | "buzzer_off"
+    Uses the existing timeout mechanism — no requestedBuzzer in Firestore.
+    """
+    from main import send_config_command
+
+    home = get_home(hid)
+    if not home:
+        return
+
+    master_mac = home.get("masterMac")
+    if not master_mac:
+        return
+
+    nodes = get_nodes_for_home(hid)
+    for node in nodes:
+        node_id = node.get("nodeId")
+        if not node_id:
+            continue
+
+        send_config_command(master_mac, node_id, cmd)
+
+        key = (hid, node_id, cmd)
+        existing = _pending_commands.get(key)
+        if existing:
+            existing.cancel()
+
+        timer = threading.Timer(
+            COMMAND_TIMEOUT_SECONDS,
+            _on_buzzer_timeout,
+            args=(hid, node_id, cmd)
+        )
+        _pending_commands[key] = timer
+        timer.start()
+
+    print(f"[DB] Buzzer command '{cmd}' sent to all nodes of home {hid}")
+
+
+def _on_buzzer_timeout(hid: str, node_id: str, cmd: str):
+    # buzzer commands are best-effort — just log, no revert needed
+    key = (hid, node_id, cmd)
+    _pending_commands.pop(key, None)
+    print(f"[DB] Buzzer command '{cmd}' to node {node_id} timed out (best-effort, no revert)")
+
+
+def resolve_buzzer_command(hid: str, node_id: str, cmd: str):
+    timer = _pending_commands.pop((hid, node_id, cmd), None)
+    if timer:
+        timer.cancel()
 
 def revert_node_requested_armed(hid: str, node_id: str):
     node = get_node(hid, node_id)

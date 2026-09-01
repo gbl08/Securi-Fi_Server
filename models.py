@@ -46,7 +46,7 @@ class NodeConfigRequest(BaseModel):
 class NodeConfigCommand(BaseModel):
     node_id: str
 
-    cmd: Optional[str] = None # "arm" | "disarm" | "reboot" | "deep_sleep"
+    cmd: Optional[str] = None # "arm" | "disarm" | "reboot" | "deep_sleep" | "buzzer_on_alarm" | "buzzer_on_warning" | "buzzer_off" 
 
 class NodeConfigConfirmation(BaseModel):
     node_id: str
@@ -138,6 +138,7 @@ class CacheDoc(BaseModel):
 
 class EventDoc(BaseModel):
     hid: str
+    event_type: str = Field(alias="eventType") # "intruder" | "fire" | "gas"
 
     started_at: datetime = Field(alias="startedAt")
     ended_at: Optional[datetime] = Field(default=None, alias="endedAt")

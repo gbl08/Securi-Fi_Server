@@ -18,6 +18,7 @@ from database import (
     revert_node_requested_armed, clear_node_requested_reboot, clear_node_requested_deep_sleep,
     _node_readings_to_package_reading_and_alarm, _build_cache_entry, append_to_cache,
     send_command_with_timeout, resolve_pending_command,
+    resolve_buzzer_command, send_buzzer_to_home, _buzzer_active,
     db,
 )
 # from notifications import notify_home # NU IN MVP4
@@ -108,7 +109,6 @@ async def handle_package(raw: dict):
         print(f"[SERVER] Invalid package: {e}")
         return
 
-    # override ESP timestamp with server UTC — avoids clock skew on comparisons
     pkg.timestamp = datetime.now(timezone.utc).isoformat()
 
     home = get_home_by_mac(pkg.master_mac)
@@ -130,13 +130,19 @@ async def handle_package(raw: dict):
             signal_weak=node.warnings.signal_weak,
         )
 
+    active_eid = home.get("activeEventId")
+
     # disaster detection
     disaster_type = _get_disaster_type(pkg)
     if disaster_type:
-        active_eid = home.get("activeEventId")
-        if not active_eid:
-            active_eid = start_event(hid)
-            print(f"[SERVER] Disaster event started ({disaster_type}): {active_eid}")
+        if active_eid:
+            close_event(hid, active_eid, send_buzzer_off=False)  # buzzer_off skipped — we're about to resend
+
+        active_eid = start_event(hid, disaster_type)
+        send_buzzer_to_home(hid, "buzzer_on_warning")
+        _buzzer_active[hid] = True
+        print(f"[SERVER] Disaster event started ({disaster_type}): {active_eid}")
+        # await notify_home(hid, disaster_type, 1.0)
 
         movement_pct, _ = _node_readings_to_package_reading_and_alarm(pkg)
         disaster_entry = _build_cache_entry(pkg, movement_pct, True)
@@ -145,20 +151,31 @@ async def handle_package(raw: dict):
         return
 
     analysis = append_to_cache(hid, pkg)
-    active_eid = home.get("activeEventId")
+    active_eid = home.get("activeEventId") 
+    idle_streak = analysis["idle_streak"]
+
+    BUZZER_IDLE_STOP = 10 
+
+    if active_eid:
+        buzzer_on = _buzzer_active.get(hid, False)
+
+        if idle_streak >= BUZZER_IDLE_STOP and buzzer_on:
+            send_buzzer_to_home(hid, "buzzer_off")
+            _buzzer_active[hid] = False
+
+        elif idle_streak == 0 and not buzzer_on:
+            send_buzzer_to_home(hid, "buzzer_on_alarm")
+            _buzzer_active[hid] = True
 
     if not analysis["flushed"]:
-        # mid-cache: only thing that can happen is idle streak closing an open event
         if analysis["should_close"] and active_eid:
             close_event(hid, active_eid)
         touch_home_last_seen(hid)
         return
 
-    # cache flushed
-    entries = analysis["entries"]   # list[CacheEntry], exactly MAX_CACHE items
+    entries = analysis["entries"]
 
     if active_eid:
-        # check if user already closed the event while this cache was filling
         event_doc = (
             db.collection("home_events").document(hid)
             .collection("events").document(active_eid)
@@ -175,20 +192,21 @@ async def handle_package(raw: dict):
             if analysis["should_close"]:
                 close_event(hid, active_eid)
                 print(f"[SERVER] Event {active_eid} closed by idle streak")
-
     else:
-        # no active event 
         if analysis["is_alarm"]:
-            new_eid = start_event(hid)
+            new_eid = start_event(hid, "intruder")
             print(f"[SERVER] Intruder event started: {new_eid}")
             update_event(hid, new_eid, entries)
+            send_buzzer_to_home(hid, "buzzer_on_alarm")
+            _buzzer_active[hid] = True
+            # await notify_home(hid, "intruder", analysis["alarm_count"] / MAX_CACHE)
 
     for node in pkg.nodes:
         active_warnings = [
             w for w, v in [
-                ("low_battery", node.warnings.low_battery),
+                ("low_battery",      node.warnings.low_battery),
                 ("not_transmitting", node.warnings.not_transmitting),
-                ("signal_weak", node.warnings.signal_weak),
+                ("signal_weak",      node.warnings.signal_weak),
             ] if v
         ]
         if active_warnings:
@@ -263,6 +281,11 @@ async def handle_config_confirmation(master_mac: str, raw: dict):
             if not conf.success:
                 print(f"[SERVER] Node {conf.node_id} deep sleep FAILED")
 
+        case "buzzer_on_alarm" | "buzzer_on_warning" | "buzzer_off":
+            resolve_buzzer_command(hid, conf.node_id, conf.cmd)
+            if not conf.success:
+                print(f"[SERVER] Buzzer command '{conf.cmd}' FAILED on node {conf.node_id}")
+                
         case _:
             print(f"[SERVER] Unknown cmd in confirmation: {conf.cmd}")
 

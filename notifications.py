@@ -15,12 +15,12 @@ def get_notification_content(alarm_type: str, probability: float) -> tuple[str, 
             )
         case "flame":
             return (
-                "Securi-Fi: Fire detected"
+                "Securi-Fi: Fire detected",
                 "Flames were detected in your house"
             )
         case _:
             return (
-                "Securi-Fi: Alert"
+                "Securi-Fi: Alert",
                 "Something is happening in your house, open the app for more details"
             )
 
