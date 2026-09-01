@@ -433,7 +433,7 @@ def _on_command_timeout(hid: str, node_id: str, cmd: str):
         return  # already resolved by a confirmation
 
     _pending_commands.pop(key, None)
-    print(f"[DB] Command '{cmd}' to node {node_id} timed out — reverting")
+    print(f"[DB] Command '{cmd}' to node {node_id} timed out, reverting")
 
     match cmd:
         case "arm" | "disarm":
