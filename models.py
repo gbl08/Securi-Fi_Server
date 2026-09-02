@@ -11,7 +11,7 @@ class NodeWarning(BaseModel):
     signal_weak: bool = False
 
 class NodeSensors(BaseModel):
-    flame: bool = False
+    fire: bool = False
     gas: bool = False
     battery_pct: Optional[int] = None 
 
@@ -94,7 +94,7 @@ class NodeDoc(BaseModel):
 
 # cache
 class CacheSensorsDoc(BaseModel):
-    flame: bool
+    fire: bool
     gas: bool
     battery_pct: Optional[int] = Field(default=None, alias="batteryPct")
 
@@ -138,7 +138,7 @@ class CacheDoc(BaseModel):
 
 class EventDoc(BaseModel):
     hid: str
-    event_type: str = Field(alias="eventType") # "intruder" | "fire" | "gas"
+    event_type: str = Field(alias="eventType") # "intrusion" | "fire" | "gas_leak"
 
     started_at: datetime = Field(alias="startedAt")
     ended_at: Optional[datetime] = Field(default=None, alias="endedAt")

@@ -201,12 +201,12 @@ async def handle_package(raw: dict):
                 print(f"[SERVER] Event {active_eid} closed by idle streak")
     else:
         if analysis["is_alarm"]:
-            new_eid = start_event(hid, "intruder")
-            print(f"[SERVER] Intruder event started: {new_eid}")
+            new_eid = start_event(hid, "intrusion")
+            print(f"[SERVER] Intrusion event started: {new_eid}")
             update_event(hid, new_eid, entries)
             send_buzzer_to_home(hid, "buzzer_on_alarm")
             _buzzer_active[hid] = True
-            # await notify_home(hid, "intruder", analysis["alarm_count"] / MAX_CACHE)
+            # await notify_home(hid, "intrusion", analysis["alarm_count"] / MAX_CACHE)
 
     for node in pkg.nodes:
         active_warnings = [
@@ -298,11 +298,11 @@ async def handle_config_confirmation(master_mac: str, raw: dict):
 
 # disaster helper:
 def _get_disaster_type(pkg: Package) -> str | None:
-    has_flame = any(n.sensors.flame for n in pkg.nodes)
+    has_fire = any(n.sensors.flame for n in pkg.nodes)
     has_gas = any(n.sensors.gas for n in pkg.nodes)
 
-    if has_flame: return "flame"
-    if has_gas: return "gas"
+    if has_fire: return "fire"
+    if has_gas: return "gas_leak"
     return None
 
 
