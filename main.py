@@ -19,6 +19,7 @@ from database import (
     _node_readings_to_package_reading_and_alarm, _build_cache_entry, append_to_cache,
     send_command_with_timeout, resolve_pending_command,
     resolve_buzzer_command, send_buzzer_to_home, _buzzer_active,
+    _pending_commands,
     db,
 )
 # from notifications import notify_home # NU IN MVP4
@@ -75,23 +76,28 @@ def on_nodes_snapshot(col_snapshot, changes, read_time):
         if not master_mac:
             continue
 
-        # arm / disarm mismatch
         requested_armed = data.get("requestedArmed", False)
-        current_armed   = data.get("armed", False)
+        current_armed = data.get("armed", False)
         if requested_armed != current_armed:
             cmd = "arm" if requested_armed else "disarm"
-            print(f"[SNAPSHOT] Node {node_id} {cmd} mismatch, sending command")
-            send_command_with_timeout(hid, master_mac, node_id, cmd)
+            key = (hid, node_id, cmd)
+            if key not in _pending_commands:   # ← only send if not already waiting
+                print(f"[SNAPSHOT] Node {node_id} {cmd} mismatch, sending command")
+                send_command_with_timeout(hid, master_mac, node_id, cmd)
+            else:
+                print(f"[SNAPSHOT] Node {node_id} {cmd} already pending, skipping")
 
-        # reboot request
         if data.get("requestedReboot", False):
-            print(f"[SNAPSHOT] Node {node_id} reboot requested")
-            send_command_with_timeout(hid, master_mac, node_id, "reboot")
+            key = (hid, node_id, "reboot")
+            if key not in _pending_commands:
+                print(f"[SNAPSHOT] Node {node_id} reboot requested")
+                send_command_with_timeout(hid, master_mac, node_id, "reboot")
 
-        # deep sleep request
         if data.get("requestedDeepSleep", False):
-            print(f"[SNAPSHOT] Node {node_id} deep sleep requested")
-            send_command_with_timeout(hid, master_mac, node_id, "deep_sleep")
+            key = (hid, node_id, "deep_sleep")
+            if key not in _pending_commands:
+                print(f"[SNAPSHOT] Node {node_id} deep sleep requested")
+                send_command_with_timeout(hid, master_mac, node_id, "deep_sleep")
 
 def start_firestore_listener():
     db.collection("nodes").on_snapshot(on_nodes_snapshot)
