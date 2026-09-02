@@ -110,6 +110,7 @@ async def handle_package(raw: dict):
         return
 
     pkg.timestamp = datetime.now(timezone.utc).isoformat()
+    print(f"[SERVER] Package recieved (master_mac={pkg.master_mac}, timestamp={pkg.timestamp}, movement_pct = [{pkg.nodes[0].movement_pct}, {pkg.nodes[1].movement_pct}, {pkg.nodes[2].movement_pct}, {pkg.nodes[3].movement_pct}])")
 
     home = get_home_by_mac(pkg.master_mac)
     if not home:
