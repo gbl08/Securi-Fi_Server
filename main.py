@@ -225,21 +225,20 @@ async def handle_config_request(master_mac: str, raw: dict):
 
     home = get_home_by_mac(master_mac)
     if not home:
-        print(f"[SERVER] Config request from unknown MAC {master_mac}")
-        return 
+        print(f"[SERVER] Config request from unknown MAC {master_mac}, auto-creating home")
+        hid = create_home(master_mac)
+        home = get_home(hid)
+        home["hid"] = hid
 
     hid = home["hid"]
+
+    upsert_node(hid, req.node_id, req.role)
+
     node = get_node(hid, req.node_id)
-
-    if not node:
-        print(f"[SERVER] Config request for unknown node {req.node_id} in home {hid}. Default to standby")
-        send_config_command(master_mac, req.node_id, "disarm")
-        return 
-
     requested_armed = node.get("requestedArmed", False)
     cmd = "arm" if requested_armed else "disarm"
     send_config_command(master_mac, req.node_id, cmd)
-    print(f"[SERVER] Config request from {req.node_id}: sending {cmd} setup command")
+    print(f"[SERVER] Config request from {req.node_id}: sending {cmd}")
 
 
 # config confirmation handler

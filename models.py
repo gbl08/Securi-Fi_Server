@@ -41,6 +41,8 @@ class NodeConfigRequest(BaseModel):
     node_id: str
     master_mac: str
 
+    role: str # "master" | "slave"
+
     
 
 class NodeConfigCommand(BaseModel):
