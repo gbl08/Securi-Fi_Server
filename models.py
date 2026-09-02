@@ -96,7 +96,7 @@ class NodeDoc(BaseModel):
 class CacheSensorsDoc(BaseModel):
     flame: bool
     gas: bool
-    battery_pct: Optional[int] = None
+    battery_pct: Optional[int] = Field(default=None, alias="batteryPct")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -115,12 +115,10 @@ class CacheNodeReadingDoc(BaseModel):
 
 class CacheEntry(BaseModel):
     timestamp: str
-
-    warning_type: Optional[str] = None
+    warning_type: Optional[str] = Field(default=None, alias="warningType")
     is_alarm: bool = Field(alias="isAlarm")
     package_movement_pct: int = Field(alias="packageMovementPct")
-    
-    nodes: List[CacheNodeReadingDoc] 
+    nodes: List[CacheNodeReadingDoc]
 
     model_config = ConfigDict(populate_by_name=True)
 
