@@ -31,13 +31,13 @@ service cloud.firestore {
       allow read: if request.auth != null && isLinkedToHome(hid);
       allow write: if false; // backend/server use the Admin SDK, which bypasses rules entirely
     }
+    
+    match /home_events/{hid}/events/{eid} {
+      allow read: if request.auth != null && isLinkedToHome(hid);
 
-    match /events/{eid} {
-      allow read: if request.auth != null && isLinkedToHome(resource.data.hid);
-      allow update: if request.auth != null && isLinkedToHome(resource.data.hid)
-                    && request.resource.data.diff(resource.data).affectedKeys()
-                       .hasOnly(['dismissedByUser', 'falseAlarm']);
-      allow create: if false;
+      match /chunks/{cid} {
+        allow read: if request.auth != null && isLinkedToHome(hid);
+      }
     }
   }
 }
