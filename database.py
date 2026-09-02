@@ -347,31 +347,8 @@ def update_event(hid: str, eid: str, entries: list[CacheEntry]):
         return
 
     chunk_data = {
-        "savedAt": datetime.now(timezone.utc).isoformat(),
-        "packages": [
-            {
-                "timestamp":          e.timestamp,
-                "warning_type":       e.warning_type,
-                "package_movement_pct": e.package_movement_pct,
-                "is_alarm":           e.is_alarm,
-                "nodes": [
-                    {
-                        "node_id":         n.node_id if hasattr(n, "node_id") else None,
-                        "state":           n.state,
-                        "movement_pct":    n.movement_pct,
-                        "raw_mq2_reading": n.raw_mq2_reading,
-                        "is_alarm":        n.is_alarm,
-                        "sensors": {
-                            "flame":       n.sensors.flame,
-                            "gas":         n.sensors.gas,
-                            "battery_pct": n.sensors.battery_pct,
-                        },
-                    }
-                    for n in e.nodes
-                ],
-            }
-            for e in entries
-        ],
+        "savedAt": datetime.now(timezone.utc),
+        "packages": [e.model_dump(by_alias=True) for e in entries],
     }
 
     chunk_index = _event_chunk_counters.get(eid, 0)
