@@ -172,6 +172,7 @@ IDLE_CLOSE_COUNT = 30 # se ia si dupa flush
 _event_chunk_counters: dict[str, int] = {}
 _idle_streaks: dict[str, int] = {}
 _buzzer_active: dict[str, bool] = {}
+_known_nodes: set[str] = set()
 
 # helpers
 def _node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]:
