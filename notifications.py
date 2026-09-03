@@ -8,12 +8,12 @@ def get_notification_content(alarm_type: str, probability: float) -> tuple[str, 
                 "Securi-Fi: Intruder detected",
                 f"Probability: {probability:.0%}. Open the app for more details"
             )
-        case "gas":
+        case "gas_leak":
             return (
                 "Securi-Fi: Gas detected",
                 "The gas alarm was set off in your house"
             )
-        case "flame":
+        case "fire":
             return (
                 "Securi-Fi: Fire detected",
                 "Flames were detected in your house"
