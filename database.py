@@ -99,7 +99,7 @@ def update_node_warnings(hid: str, node_id: str, low_battery: bool, not_transmit
     doc_id = f"{hid}_{node_id}"
 
     warnings = NodeWarningDoc(
-        low_battery=low_battery,
+        low_battery=low_battery,        
         not_transmitting=not_transmitting,
         signal_weak=signal_weak,
     )
