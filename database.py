@@ -219,7 +219,7 @@ def _build_cache_entry(pkg: Package, movement_pct: int, is_alarm: bool) -> Cache
                 raw_mq2_reading=node.raw_mq2_reading,
                 is_alarm=node.movement_pct >= MOVEMENT_THRESHOLD,
                 sensors=CacheSensorsDoc(
-                    fire=node.sensors.flame,
+                    fire=node.sensors.fire,
                     gas=node.sensors.gas,
                     battery_pct=node.sensors.battery_pct,
                 )
@@ -294,7 +294,7 @@ def append_to_cache(hid: str, pkg: Package) -> dict:
             raw_mq2_reading=node.raw_mq2_reading,
             is_alarm=node.movement_pct >= MOVEMENT_THRESHOLD,
             sensors=CacheSensorsDoc(
-                fire=node.sensors.flame,
+                fire=node.sensors.fire,
                 gas=node.sensors.gas,
                 battery_pct=node.sensors.battery_pct,
             )

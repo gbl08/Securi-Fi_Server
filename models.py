@@ -54,7 +54,7 @@ class NodeConfigConfirmation(BaseModel):
     node_id: str
     master_mac: str
 
-    cmd: Optional[str] = None # "arm" | "disarm" | "reboot" | "deep_sleep"
+    cmd: Optional[str] = None # "arm" | "disarm" | "reboot" | "deep_sleep" | "buzzer_on_alarm" | "buzzer_on_warning" | "buzzer_off" 
 
     success: bool
 
