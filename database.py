@@ -59,11 +59,6 @@ def touch_home_last_seen(hid: str):
         "lastSeen": datetime.now(timezone.utc)
     })
 
-
-def set_active_event(hid: str, event_id: Optional[str]):
-    db.collection("homes").document(hid).update({"activeEventId": event_id})
-
-
 # nodes: 
 def get_node(hid: str, node_id: str) -> Optional[dict]:
     doc_id = f"{hid}_{node_id}"
@@ -112,6 +107,22 @@ def update_node_warnings(hid: str, node_id: str, low_battery: bool, not_transmit
     db.collection("nodes").document(doc_id).update({
         "warnings": warnings.model_dump(by_alias=True)
     })
+
+def _upsert_nodes_if_needed(hid: str, pkg: Package):
+    for node in pkg.nodes:
+        key = f"{hid}_{node.node_id}"
+
+        if key not in _known_nodes:
+            upsert_node(hid, node.node_id, node.role)
+            _known_nodes.add(key)
+
+        update_node_warnings(
+            hid=hid,
+            node_id=node.node_id,
+            low_battery=node.warnings.low_battery,
+            not_transmitting=node.warnings.not_transmitting,
+            signal_weak=node.warnings.signal_weak,
+        )
 
 def set_node_armed(hid: str, node_id: str, armed: bool):
     """
@@ -450,12 +461,6 @@ def clear_node_requested_reboot(hid: str, node_id: str):
 
 def clear_node_requested_deep_sleep(hid: str, node_id: str):
     db.collection("nodes").document(f"{hid}_{node_id}").update({"requestedDeepSleep": False})
-
-def set_active_event(hid: str, event_id: Optional[str]):
-    db.collection("homes").document(hid).update({
-        "activeEventId": event_id,
-    })
-
 
 # in-memory pending command tokens
 COMMAND_TIMEOUT_SECONDS = 15

@@ -4,6 +4,7 @@ import asyncio
 import json
 import threading
 import time
+import queue
 import paho.mqtt.client as mqtt
 from datetime import datetime, timezone
  
@@ -11,7 +12,7 @@ from models import Package, NodeConfigRequest, NodeConfigCommand, NodeConfigConf
 from database import (
     get_home_by_mac, get_home, create_home,
     touch_home_last_seen,
-    upsert_node, update_node_warnings,
+    _upsert_nodes_if_needed,
     get_node,
     set_node_armed, 
     start_event, update_event, close_event,
@@ -41,6 +42,8 @@ TOPIC_CONFIG_COMMAND = "securifi/config/command/{mac}" # server -> esp
 loop: asyncio.AbstractEventLoop = None
 mqtt_client: mqtt.Client = None
 
+# telemetry:
+_telemetry_queue: queue.Queue = queue.Queue(maxsize=50)
 
 # mqtt send:
 def send_config_command(master_mac: str, node_id: str, cmd: str):
@@ -108,17 +111,32 @@ def start_firestore_listener():
 
 
 # telemetry handler;
-async def handle_package(raw: dict):
+def handle_package_sync(raw: dict):
     try:
         pkg = Package(**raw)
     except Exception as e:
         print(f"[SERVER] Invalid package: {e}")
         return
 
-    pkg.timestamp = datetime.now(timezone.utc).isoformat()
-    print(f"[SERVER] Package recieved (master_mac={pkg.master_mac}, timestamp={pkg.timestamp}, movement_pct = [{pkg.nodes[0].movement_pct}, {pkg.nodes[1].movement_pct}, {pkg.nodes[2].movement_pct}, {pkg.nodes[3].movement_pct}])")
+    received_at = datetime.now(timezone.utc)
+
+    # Keep the timestamp representing when the server actually received
+    # the package, rather than when an old queued package is finally processed.
+    pkg.timestamp = received_at.isoformat()
+
+    print(
+        f"[SERVER] Package received "
+        f"(master_mac={pkg.master_mac}, "
+        f"timestamp={pkg.timestamp}, "
+        f"movement_pct = "
+        f"[{pkg.nodes[0].movement_pct}, "
+        f"{pkg.nodes[1].movement_pct}, "
+        f"{pkg.nodes[2].movement_pct}, "
+        f"{pkg.nodes[3].movement_pct}])"
+    )
 
     home = get_home_by_mac(pkg.master_mac)
+
     if not home:
         print(f"[SERVER] Unknown MAC {pkg.master_mac}, auto-creating home")
         hid = create_home(pkg.master_mac)
@@ -127,41 +145,62 @@ async def handle_package(raw: dict):
 
     hid = home["hid"]
 
-    for node in pkg.nodes:
-        upsert_node(hid, node.node_id, node.role)
-        update_node_warnings(
-            hid=hid,
-            node_id=node.node_id,
-            low_battery=node.warnings.low_battery,
-            not_transmitting=node.warnings.not_transmitting,
-            signal_weak=node.warnings.signal_weak,
-        )
+    # Only upsert nodes the first time they are seen.
+    # Warnings are still updated on every package.
+    _upsert_nodes_if_needed(hid, pkg)
 
     active_eid = home.get("activeEventId")
 
-    # disaster detection
+    # Disaster detection
     disaster_type = _get_disaster_type(pkg)
+
     if disaster_type:
         if active_eid:
-            close_event(hid, active_eid, send_buzzer_off=False)  # buzzer_off skipped — we're about to resend
+            close_event(hid, active_eid, send_buzzer_off=False)
 
         active_eid = start_event(hid, disaster_type)
+
         send_buzzer_to_home(hid, "buzzer_on_warning")
         _buzzer_active[hid] = True
-        print(f"[SERVER] Disaster event started ({disaster_type}): {active_eid}")
-        # await notify_home(hid, disaster_type, 1.0)
+
+        print(
+            f"[SERVER] Disaster event started "
+            f"({disaster_type}): {active_eid}"
+        )
 
         movement_pct, _ = _node_readings_to_package_reading_and_alarm(pkg)
-        disaster_entry = _build_cache_entry(pkg, movement_pct, True)
-        update_event(hid, active_eid, [disaster_entry])
+
+        disaster_entry = _build_cache_entry(
+            pkg,
+            movement_pct,
+            True
+        )
+
+        update_event(
+            hid,
+            active_eid,
+            [disaster_entry]
+        )
+
         touch_home_last_seen(hid)
         return
 
     analysis = append_to_cache(hid, pkg)
-    active_eid = home.get("activeEventId") 
+
+    # append_to_cache may have caused event-related state to change.
+    # Fetch the current event ID instead of relying on the stale value
+    # from before cache processing.
+    current_home = get_home(hid)
+
+    if not current_home:
+        print(f"[SERVER] Home {hid} disappeared while processing package")
+        return
+
+    active_eid = current_home.get("activeEventId")
+
     idle_streak = analysis["idle_streak"]
 
-    BUZZER_IDLE_STOP = 10 
+    BUZZER_IDLE_STOP = 10
 
     if active_eid:
         buzzer_on = _buzzer_active.get(hid, False)
@@ -177,6 +216,7 @@ async def handle_package(raw: dict):
     if not analysis["flushed"]:
         if analysis["should_close"] and active_eid:
             close_event(hid, active_eid)
+
         touch_home_last_seen(hid)
         return
 
@@ -184,40 +224,62 @@ async def handle_package(raw: dict):
 
     if active_eid:
         event_doc = (
-            db.collection("home_events").document(hid)
-            .collection("events").document(active_eid)
+            db.collection("home_events")
+            .document(hid)
+            .collection("events")
+            .document(active_eid)
             .get()
         )
+
         event_data = event_doc.to_dict() if event_doc.exists else {}
         ended_at = event_data.get("endedAt")
 
+        update_event(hid, active_eid, entries)
+
         if ended_at:
-            update_event(hid, active_eid, entries)
-            print(f"[SERVER] Final chunk dumped to user-closed event {active_eid}")
-        else:
-            update_event(hid, active_eid, entries)
-            if analysis["should_close"]:
-                close_event(hid, active_eid)
-                print(f"[SERVER] Event {active_eid} closed by idle streak")
+            print(
+                f"[SERVER] Final chunk dumped to "
+                f"user-closed event {active_eid}"
+            )
+        elif analysis["should_close"]:
+            close_event(hid, active_eid)
+            print(
+                f"[SERVER] Event {active_eid} closed by idle streak"
+            )
+
     else:
         if analysis["is_alarm"]:
             new_eid = start_event(hid, "intrusion")
-            print(f"[SERVER] Intrusion event started: {new_eid}")
+
+            print(
+                f"[SERVER] Intrusion event started: {new_eid}"
+            )
+
             update_event(hid, new_eid, entries)
-            send_buzzer_to_home(hid, "buzzer_on_alarm")
+
+            send_buzzer_to_home(
+                hid,
+                "buzzer_on_alarm"
+            )
+
             _buzzer_active[hid] = True
-            # await notify_home(hid, "intrusion", analysis["alarm_count"] / MAX_CACHE)
 
     for node in pkg.nodes:
         active_warnings = [
-            w for w, v in [
-                ("low_battery",      node.warnings.low_battery),
+            w
+            for w, v in [
+                ("low_battery", node.warnings.low_battery),
                 ("not_transmitting", node.warnings.not_transmitting),
-                ("signal_weak",      node.warnings.signal_weak),
-            ] if v
+                ("signal_weak", node.warnings.signal_weak),
+            ]
+            if v
         ]
+
         if active_warnings:
-            print(f"[SERVER] Node {node.node_id} warnings: {active_warnings}")
+            print(
+                f"[SERVER] Node {node.node_id} "
+                f"warnings: {active_warnings}"
+            )
 
     touch_home_last_seen(hid)
 
@@ -238,7 +300,7 @@ async def handle_config_request(master_mac: str, raw: dict):
 
     hid = home["hid"]
 
-    upsert_node(hid, req.node_id, req.role)
+    _upsert_nodes_if_needed(hid, req.node_id, req.role)
 
     node = get_node(hid, req.node_id)
     requested_armed = node.get("requestedArmed", False)
@@ -298,13 +360,31 @@ async def handle_config_confirmation(master_mac: str, raw: dict):
 
 # disaster helper:
 def _get_disaster_type(pkg: Package) -> str | None:
-    has_fire = any(n.sensors.flame for n in pkg.nodes)
+    has_fire = any(n.sensors.fire for n in pkg.nodes)
     has_gas = any(n.sensors.gas for n in pkg.nodes)
 
-    if has_fire: return "fire"
-    if has_gas: return "gas_leak"
+    if has_fire:
+        return "fire"
+
+    if has_gas:
+        return "gas_leak"
+
     return None
 
+def _telemetry_worker():
+    print("[WORKER] Telemetry worker started")
+    while True:
+        raw = _telemetry_queue.get()
+
+        try:
+            if raw is None:
+                print("[WORKER] Telemetry worker stopping")
+                return
+            handle_package_sync(raw)
+        except Exception as e:
+            print(f"[WORKER] Unhandled error processing telemetry: {e}")
+        finally:
+            _telemetry_queue.task_done()
 
 # mqtt callbacks:
 def on_mqtt_message(client, userdata, msg):
@@ -316,13 +396,22 @@ def on_mqtt_message(client, userdata, msg):
         return 
 
     if topic == TOPIC_TELEMETRY:
-        asyncio.run_coroutine_threadsafe(handle_package(raw), loop)
+        try:
+            _telemetry_queue.put_nowait(raw)
+        except queue.Full:
+            print("[MQTT] Telemetry queue full, dropping package")
     elif topic.startswith("securifi/config/request/"):
         master_mac = topic.split("/", 3)[3]
-        asyncio.run_coroutine_threadsafe(handle_config_request(master_mac, raw), loop)
+        asyncio.run_coroutine_threadsafe(
+            handle_config_request(master_mac, raw),
+            loop
+        )
     elif topic.startswith("securifi/config/confirm/"):
         master_mac = topic.split("/", 3)[3]
-        asyncio.run_coroutine_threadsafe(handle_config_confirmation(master_mac, raw), loop)
+        asyncio.run_coroutine_threadsafe(
+            handle_config_confirmation(master_mac, raw),
+            loop
+        )
     else:
         print(f"[MQTT] Unhandled topic: {topic}")
 
@@ -357,13 +446,30 @@ def start_mqtt():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global loop
+
     loop = asyncio.get_event_loop()
 
-    threading.Thread(target=start_mqtt, daemon=True).start()
-    threading.Thread(target=start_firestore_listener, daemon=True).start()
+    threading.Thread(
+        target=start_mqtt,
+        daemon=True
+    ).start()
+
+    threading.Thread(
+        target=start_firestore_listener,
+        daemon=True
+    ).start()
+
+    threading.Thread(
+        target=_telemetry_worker,
+        daemon=True
+    ).start()
 
     print("[SERVER] SecuriFi MVP4 started")
+
     yield
+
+    _telemetry_queue.put(None)
+
     print("[SERVER] SecuriFi stopped")
  
  
