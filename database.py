@@ -182,11 +182,11 @@ def revert_node_requested_armed(hid: str, node_id: str):
 
 
 def clear_node_requested_reboot(hid: str, node_id: str):
-    db.collection("nodes").document(f"{hid}_{node_id}").update({"requestedReboot": False})
+    db.collection("nodes").document(f"{hid}_{node_id}").update({"requestedRestart": False})
 
 
 def clear_node_requested_deep_sleep(hid: str, node_id: str):
-    db.collection("nodes").document(f"{hid}_{node_id}").update({"requestedDeepSleep": False})
+    db.collection("nodes").document(f"{hid}_{node_id}").update({"requestedShutDown": False})
 
 
 # user

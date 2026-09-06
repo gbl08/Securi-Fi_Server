@@ -88,13 +88,13 @@ def on_nodes_snapshot(col_snapshot, changes, read_time):
             else:
                 print(f"[SNAPSHOT] Node {node_id} {cmd} already pending, skipping")
 
-        if data.get("requestedReboot", False):
+        if data.get("requestedRestart", False):
             key = (hid, node_id, "reboot")
             if key not in _pending_commands:
                 print(f"[SNAPSHOT] Node {node_id} reboot requested")
                 send_command_with_timeout(hid, master_mac, node_id, "reboot")
 
-        if data.get("requestedDeepSleep", False):
+        if data.get("requestedShutDown", False):
             key = (hid, node_id, "deep_sleep")
             if key not in _pending_commands:
                 print(f"[SNAPSHOT] Node {node_id} deep sleep requested")
