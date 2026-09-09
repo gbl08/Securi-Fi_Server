@@ -302,6 +302,54 @@ def update_last_package(hid: str, entry: CacheEntry):
 
 
 # event chunks
+def _summarize_event(all_packages: list[CacheEntry]) -> list[dict]:
+    """
+    Reduces a full package history down to the handful of moments that
+    actually matter for the Timeline view: state transitions, first
+    appearance of a fire/gas warning, and the peak reading.
+    """
+    if not all_packages:
+        return []
+
+    summary = []
+    was_alarm = False
+    seen_warnings: set[str] = set()
+
+    for pkg in all_packages:
+        if pkg.is_alarm and not was_alarm:
+            summary.append({"timestamp": pkg.timestamp, "description": "Movement detected"})
+        elif not pkg.is_alarm and was_alarm:
+            summary.append({"timestamp": pkg.timestamp, "description": "Movement stopped"})
+        was_alarm = pkg.is_alarm
+
+        for node_id, reading in pkg.nodes.items():
+            if reading.warning_type and reading.warning_type not in seen_warnings:
+                seen_warnings.add(reading.warning_type)
+                label = "Flame or smoke detected" if reading.warning_type == "fire" else "Gas leak detected"
+                summary.append({"timestamp": pkg.timestamp, "description": label})
+
+    peak = max(all_packages, key=lambda p: p.package_pct) # nu am dat drop la peak??
+    summary.append({
+        "timestamp": peak.timestamp,
+        "description": f"Peak activity: {peak.package_pct}%",
+    })
+
+    summary.sort(key=lambda s: s["timestamp"])
+    return summary
+
+
+def _collect_all_packages_for_event(hid: str, eid: str) -> list[CacheEntry]:
+    chunk_docs = (
+        db.collection("home_events").document(hid)
+        .collection("events").document(eid)
+        .collection("chunks").order_by("savedAt").stream()
+    )
+    packages = []
+    for chunk in chunk_docs:
+        for raw_pkg in chunk.to_dict().get("packages", []):
+            packages.append(CacheEntry(**raw_pkg))
+    return packages
+
 def update_event(hid: str, eid: str, entries: list[CacheEntry]):
     if not entries:
         return
@@ -363,12 +411,21 @@ def start_event(hid: str, event_type: str) -> str:
 def close_event(hid: str, eid: str, send_buzzer_off: bool = True):
     _flush_event_buffer(hid, eid)
 
+    all_packages = _collect_all_packages_for_event(hid, eid)
+    summary = _summarize_event(all_packages)
+
     db.collection("home_events").document(hid) \
         .collection("events").document(eid) \
-        .update({"endedAt": datetime.now(timezone.utc)})
+        .update({
+            "endedAt": datetime.now(timezone.utc),
+            "summary": [
+                {"timestamp": s["timestamp"], "description": s["description"]}
+                for s in summary
+            ],
+        })
 
     set_active_event(hid, None)
-
+    
     _event_buffers.pop(eid, None)
     _event_chunk_counters.pop(eid, None)
     _idle_streaks[hid] = 0
@@ -377,8 +434,7 @@ def close_event(hid: str, eid: str, send_buzzer_off: bool = True):
     if send_buzzer_off:
         send_buzzer_to_home(hid, "buzzer_off")
 
-    print(f"[DB] Event closed: {eid}")
-
+    print(f"[DB] Event closed: {eid} ({len(summary)} summary entries)")
 
 # buzzer; 
 def send_buzzer_to_home(hid: str, cmd: str):
