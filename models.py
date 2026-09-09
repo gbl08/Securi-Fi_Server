@@ -15,18 +15,18 @@ class NodeSensors(BaseModel):
 
 class NodeReading(BaseModel):
     node_id: str
-    role: str
+    role: Optional[str] = None
     # state: str
     armed: Optional[bool] = None
 
-    movement_pct: int
-    sensor_reading: int
-    battery_pct: int
+    movement_pct: Optional[bool] = None
+    sensor_reading: Optional[int] = None
+    battery_pct: Optional[int] = None
     # warnings: NodeWarning
     # sensors: NodeSensors
     
-    warning_type: str
-    report_type: str 
+    warning_type: Optional[str] = None
+    report_type: Optional[str] = None
 
 class Package(BaseModel):
     master_mac: str
@@ -39,7 +39,7 @@ class Package(BaseModel):
 class NodeConfigRequest(BaseModel):
     node_id: str
     master_mac: str
-    role: str  # "master" | "slave"
+    role: Optional[str] = None  # "master" | "slave"
 
 
 class NodeConfigCommand(BaseModel):

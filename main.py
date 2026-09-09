@@ -240,7 +240,7 @@ async def handle_config_request(master_mac: str, raw: dict):
     node = get_node(hid, req.node_id)
 
     if not node:
-        upsert_node(hid, req.node_id, req.role)
+        upsert_node(hid, req.node_id, req.role or "unknown")
         node = get_node(hid, req.node_id)
 
     if not node:
@@ -305,9 +305,9 @@ async def handle_config_confirmation(master_mac: str, raw: dict):
 
 # disaster detection
 def _get_disaster_type(pkg: Package) -> str | None:
-    if any(n.sensors.fire for n in pkg.nodes):
+    if any(n.warning_type == "fire" for n in pkg.nodes):
         return "fire"
-    if any(n.sensors.gas for n in pkg.nodes):
+    if any(n.warning_type == "gas_leak" for n in pkg.nodes):
         return "gas_leak"
     return None
 

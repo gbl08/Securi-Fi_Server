@@ -106,21 +106,17 @@ def update_node_from_reading(hid: str, node: NodeReading):
     db.collection("nodes").document(doc_id).update({
         "batteryPct": node.battery_pct,
         "reportType": node.report_type,
-        "sensorReading": node.sensor_reading,
-        "movementPct": node.movement_pct,
+        "sensorReading": node.sensor_reading or 0,
+        "movementPct": node.movement_pct or 0,
         "warningType": node.warning_type,
     })
 
 
 def _upsert_nodes_if_needed(hid: str, pkg: Package):
-    """
-    Creates node documents on first sight.
-    Always updates telemetry values (warnings, movement, sensors).
-    """
     for node in pkg.nodes:
         key = f"{hid}_{node.node_id}"
         if key not in _known_nodes:
-            upsert_node(hid, node.node_id, node.role)
+            upsert_node(hid, node.node_id, node.role or "unknown")
             _known_nodes.add(key)
         update_node_from_reading(hid, node)
 
@@ -199,11 +195,11 @@ _pending_commands: dict[tuple, threading.Timer] = {} # (hid, node_id, cmd) → t
 
 # package analysis
 def _node_readings_to_package_reading_and_alarm(pkg: Package) -> tuple[int, bool]:
-    active_nodes = [n for n in pkg.nodes if not n.warnings.not_transmitting]
+    active_nodes = [n for n in pkg.nodes if n.report_type != "not_transmitting"]
     if not active_nodes:
         return 0, False
 
-    readings = sorted((n.movement_pct for n in active_nodes), reverse=True)
+    readings = sorted((n.movement_pct or 0 for n in active_nodes), reverse=True)
     package_movement_pct = readings[0] if len(readings) == 1 else (readings[0] + readings[1]) // 2
     package_movement_pct = min(200, max(0, package_movement_pct))
     over_threshold = sum(1 for r in readings if r >= MOVEMENT_THRESHOLD)
