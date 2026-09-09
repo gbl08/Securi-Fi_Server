@@ -19,7 +19,7 @@ class NodeReading(BaseModel):
     # state: str
     armed: Optional[bool] = None
 
-    movement_pct: Optional[bool] = None
+    movement_pct: Optional[int] = None
     sensor_reading: Optional[int] = None
     battery_pct: Optional[int] = None
     # warnings: NodeWarning
