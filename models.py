@@ -16,17 +16,22 @@ class NodeSensors(BaseModel):
 class NodeReading(BaseModel):
     node_id: str
     role: str
-    state: str
+    # state: str
     armed: Optional[bool] = None
+
     movement_pct: int
-    raw_mq2_reading: int
-    warnings: NodeWarning
-    sensors: NodeSensors
+    sensor_reading: int
+    battery_pct: int
+    # warnings: NodeWarning
+    # sensors: NodeSensors
+    
+    warning_type: str
+    report_type: str 
 
 class Package(BaseModel):
     master_mac: str
     timestamp: str
-    warning_type: Optional[str] = None
+    # warning_type: Optional[str] = None
     nodes: List[NodeReading]
 
 

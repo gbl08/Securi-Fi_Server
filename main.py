@@ -209,13 +209,13 @@ def handle_package_sync(raw: dict):
         _buzzer_active[hid] = True
 
     for node in pkg.nodes:
-        warnings = [w for w, v in [
-            ("low_battery", node.warnings.low_battery),
-            ("not_transmitting", node.warnings.not_transmitting),
-            ("signal_weak", node.warnings.signal_weak),
-        ] if v]
-        if warnings:
-            print(f"[SERVER] Node {node.node_id} warnings: {warnings}")
+        reports = [
+            (report, True)
+            for report in ["low_battery", "not_transmitting", "signal_weak"]
+            if node.report_type == report
+        ]
+        if reports:
+            print(f"[SERVER] Node {node.node_id} reports: {reports}")
 
     touch_home_last_seen(hid)
 

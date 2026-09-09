@@ -95,23 +95,6 @@ def upsert_node(hid: str, node_id: str, role: str, nickname: Optional[str] = Non
     doc_ref.set(node.model_dump(by_alias=True), merge=True)
 
 
-def _get_report_type(node: NodeReading) -> Optional[str]:
-    if node.warnings.low_battery:
-        return "low_battery"
-    if node.warnings.not_transmitting:
-        return "not_transmitting"
-    if node.warnings.signal_weak:
-        return "signal_weak"
-    return None
-
-
-def _get_warning_type(node: NodeReading) -> Optional[str]:
-    if node.sensors.fire:
-        return "fire"
-    if node.sensors.gas:
-        return "gas_leak"
-    return None
-
 
 def update_node_from_reading(hid: str, node: NodeReading):
     """Updates the Firestore node doc with the latest telemetry values."""
@@ -121,11 +104,11 @@ def update_node_from_reading(hid: str, node: NodeReading):
         upsert_node(hid, node.node_id, node.role)
 
     db.collection("nodes").document(doc_id).update({
-        "batteryPct": node.sensors.battery_pct,
-        "reportType": _get_report_type(node),
-        "sensorReading": node.raw_mq2_reading,
+        "batteryPct": node.battery_pct,
+        "reportType": node.report_type,
+        "sensorReading": node.sensor_reading,
         "movementPct": node.movement_pct,
-        "warningType": _get_warning_type(node),
+        "warningType": node.warning_type,
     })
 
 
@@ -238,11 +221,11 @@ def _build_cache_entry(pkg: Package, movement_pct: int, is_alarm: bool) -> Cache
         timestamp=datetime.fromisoformat(pkg.timestamp),
         nodes={
             node.node_id: CacheNodeReadingDoc(
-                battery_pct=node.sensors.battery_pct,
-                report_type=_get_report_type(node),
-                sensor_reading=node.raw_mq2_reading,
+                battery_pct=node.battery_pct,
+                report_type=node.report_type,
+                sensor_reading=node.sensor_reading,
                 movement_pct=node.movement_pct,
-                warning_type=_get_warning_type(node),
+                warning_type=node.warning_type,
             )
             for node in pkg.nodes
         }
