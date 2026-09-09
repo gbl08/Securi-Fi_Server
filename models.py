@@ -88,8 +88,8 @@ class NodeDoc(BaseModel):
 class CacheNodeReadingDoc(BaseModel):
     battery_pct: Optional[int] = Field(default=None, alias="batteryPct")
     report_type: Optional[str] = Field(default=None, alias="reportType")
-    sensor_reading: int = Field(alias="sensorReading")
-    movement_pct: int = Field(alias="movementPct")
+    sensor_reading: Optional[int] = Field(alias="sensorReading")
+    movement_pct: Optional[int] = Field(alias="movementPct")
     warning_type: Optional[str] = Field(default=None, alias="warningType")
 
     model_config = ConfigDict(populate_by_name=True)
