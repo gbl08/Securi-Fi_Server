@@ -215,7 +215,8 @@ def handle_package_sync(raw: dict):
             if node.report_type == report
         ]
         if reports:
-            print(f"[SERVER] Node {node.node_id} reports: {reports}")
+            # print(f"[SERVER] Node {node.node_id} reports: {reports}")
+            pass
 
     touch_home_last_seen(hid)
 
